@@ -19,6 +19,10 @@ pinned: false
 
 Turn natural-language prompts into quick CAD studies, test the interaction with real users, and learn what deserves to become a bigger product.
 
+<p align="center">
+  <img src="docs/assets/naturalcad-hero-reference.jpg" alt="NaturalCAD example output" width="680" />
+</p>
+
 ## Current app path
 
 - `app.py` - Hugging Face Space entrypoint
