@@ -1,6 +1,6 @@
 FROM continuumio/miniconda3:latest
 
-# Install system libraries that OpenCascade/Gradio often require
+# Install system libraries
 RUN apt-get update && apt-get install -y \
     libgl1 \
     libglib2.0-0 \
@@ -15,28 +15,21 @@ ENV HOME=/home/user \
 
 WORKDIR $HOME/app
 
-# Set up conda environment with build123d from conda-forge
+# Create conda environment and install just the native dependencies (ocp/cadquery-ocp)
 RUN conda create -n cad python=3.10 -y && \
-    conda install -n cad -c conda-forge build123d=0.10.0 -y && \
+    conda install -n cad -c conda-forge "ocp>=7.8,<7.9" -y && \
     conda clean -a -y
 
-# We need conda in the path
 ENV PATH=$CONDA_DIR/envs/cad/bin:$PATH
 
-# Install the rest of the python requirements via pip
+# Install pip requirements including build123d
 COPY --chown=user requirements.txt .
-# Remove build123d from pip requirements since conda handles it
-RUN grep -v "build123d" requirements.txt > reqs_no_cad.txt && \
-    $CONDA_DIR/envs/cad/bin/pip install --no-cache-dir -r reqs_no_cad.txt
+RUN $CONDA_DIR/envs/cad/bin/pip install --no-cache-dir --upgrade pip && \
+    $CONDA_DIR/envs/cad/bin/pip install --no-cache-dir -r requirements.txt
 
-# Create necessary directories and set permissions
+# Setup app
 RUN mkdir -p artifacts/runs artifacts/logs
-
-# Copy the rest of the application
 COPY --chown=user . .
 
-# Hugging Face exposes port 7860 by default
 EXPOSE 7860
-
-# Run the app using the conda environment
 CMD ["/opt/conda/envs/cad/bin/python", "app.py"]
