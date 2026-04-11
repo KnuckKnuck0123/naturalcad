@@ -1,7 +1,7 @@
 ---
 title: NaturalCAD
 emoji: 🍃
-colorFrom: slate
+colorFrom: gray
 colorTo: blue
 sdk: gradio
 sdk_version: 4.44.1
