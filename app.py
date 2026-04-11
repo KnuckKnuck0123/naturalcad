@@ -19,10 +19,4 @@ if __name__ == '__main__':
     demo.launch(
         server_name='0.0.0.0',
         server_port=7860,
-        css="""
-        #model-viewer {height: 620px !important; border-radius: 18px; overflow: hidden;}
-        .log-box textarea {font-family: 'JetBrains Mono', monospace; font-size: 13px;}
-        .gradio-container {max-width: 1380px !important;}
-        button.primary {font-weight: 700;}
-        """,
     )
