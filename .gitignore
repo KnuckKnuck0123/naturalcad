@@ -1,0 +1,16 @@
+.DS_Store
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+**/artifacts/*
+!**/artifacts/.gitkeep
+!**/artifacts/runs/
+!**/artifacts/runs/.gitkeep
+!**/artifacts/logs/
+!**/artifacts/logs/.gitkeep
+.env
+.env.*
+.vite/
