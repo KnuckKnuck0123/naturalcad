@@ -3,10 +3,8 @@ title: NaturalCAD
 emoji: 🍃
 colorFrom: slate
 colorTo: blue
-sdk: gradio
-sdk_version: 4.44.1
-python_version: "3.10"
-app_file: app.py
+sdk: docker
+app_port: 7860
 pinned: false
 ---
 
