@@ -1,6 +1,6 @@
 ---
 title: NaturalCAD
-emoji: 🧱
+emoji: 🍃
 colorFrom: slate
 colorTo: blue
 sdk: gradio
@@ -11,9 +11,13 @@ pinned: false
 
 # NaturalCAD
 
-NaturalCAD is a public prompt-to-CAD demo built around build123d.
+<p align="center">
+  <img src="docs/assets/naturalcad-icon-selected.jpg" alt="NaturalCAD icon" width="220" />
+</p>
 
-The immediate goal is simple: get it in front of people fast, learn from real prompts, and improve from actual usage instead of guessing in a vacuum.
+**NaturalCAD** is a public prompt-to-CAD demo built around build123d.
+
+Turn natural-language prompts into quick CAD studies, test the interaction with real users, and learn what deserves to become a bigger product.
 
 ## Current app path
 
