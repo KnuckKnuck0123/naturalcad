@@ -1,0 +1,17 @@
+# NaturalCAD Hugging Face Space ignore guidance
+
+.git/
+archive/
+apps/backend-api/
+apps/web-visualizer/
+packages/
+examples/
+**/__pycache__/
+**/.DS_Store
+**/.venv/
+**/node_modules/
+**/dist/
+apps/gradio-demo/artifacts/runs/*
+apps/gradio-demo/artifacts/logs/*
+!apps/gradio-demo/artifacts/runs/.gitkeep
+!apps/gradio-demo/artifacts/logs/.gitkeep
