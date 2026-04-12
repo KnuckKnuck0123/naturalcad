@@ -381,7 +381,79 @@ def _append_run_log(entry: dict) -> None:
 
 
 def run_build123d_mock(code: str, prompt: str = "") -> tuple[str | None, str | None, str | None, str, str, str | None, float]:
-    return None, None, None, "Mock execution. Real execution moved to backend worker.", "Mock execution.", "mock_id", 0.0
+    return None, None, None, "Mock execution.", "Mock mode.", "mock_id", 0.0
+
+
+def run_build123d(code: str, prompt: str = "") -> tuple[str | None, str | None, str | None, str, str, str | None, float]:
+    """Run build123d code locally."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source_file = Path(tmpdir) / "user_script.py"
+        source_file.write_text(code)
+        
+        run_id = uuid.uuid4().hex[:8]
+        stl_file = Path(tmpdir) / f"{run_id}.stl"
+        step_file = Path(tmpdir) / f"{run_id}.step"
+        glb_file = Path(tmpdir) / f"{run_id}.glb"
+        
+        logs = [f"Run ID: {run_id}"]
+        
+        runner_code = f'''
+import sys
+from pathlib import Path
+from build123d import export_stl, export_step
+from trimesh import load_mesh
+
+source = Path(r"{source_file}").read_text()
+g = {{}}
+exec(compile(source, str(source), g))
+result = g.get("result")
+if result is None:
+    sys.exit("No `result` geometry")
+
+shape = result
+if hasattr(result, "wrapped"): shape = result.wrapped
+if hasattr(result, "part"): shape = result.part
+if hasattr(result, "shape"): shape = result.shape
+
+if shape is None:
+    sys.exit("Could not extract shape")
+
+export_stl(shape, r"{stl_file}")
+export_step(shape, r"{step_file}")
+
+# Make GLB preview
+mesh = load_mesh(str(stl_file), force="mesh")
+mesh.apply_transform([
+    [1,0,0,0], [0,0,1,0], [0,-1,0,0], [0,0,0,1]], False)
+mesh.export(str(glb_file))
+'''
+        runner_file = Path(tmpdir) / "_runner.py"
+        runner_file.write_text(runner_code)
+        
+        result = subprocess.run(
+            [sys.executable, str(runner_file)],
+            capture_output=True, text=True, timeout=60
+        )
+        logs.append(result.stdout or "")
+        if result.stderr:
+            logs.append(f"[stderr] {result.stderr[:500]}")
+        
+        if result.returncode != 0:
+            return None, None, None, "\n".join(logs), f"Error: {result.returncode}", run_id, 0.0
+        
+        # Copy files to persistent location
+        run_dir = Path("artifacts/runs")
+        run_dir.mkdir(parents=True, exist_ok=True)
+        final_stl = run_dir / f"{run_id}.stl"
+        final_step = run_dir / f"{run_id}.step"
+        final_glb = run_dir / f"{run_id}.glb"
+        shutil.copy(stl_file, final_stl)
+        shutil.copy(step_file, final_step)
+        if glb_file.exists():
+            shutil.copy(glb_file, final_glb)
+        
+        logs.append(f"Generated: {run_id}")
+        return str(final_glb), str(final_stl), str(final_step), "\n".join(logs), "Success", run_id, 0.0
 
 
 def generate_from_prompt(prompt: str, mode: str, output_type: str):
@@ -424,56 +496,32 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
 
     job_id = str((job_data or {}).get("id", ""))
     
-    if not backend_ok or not job_id:
-        code = render_code_from_spec(spec)
-        glb_path, stl_path, step_path, logs, summary, run_id, execution_seconds = run_build123d_mock(code, prompt)
-        combined_logs = "\n\n".join([
-            "Backend unavailable, using local fallback:",
-            backend_log,
-            "Local execution log:",
-            logs,
-        ])
-        return None, None, None, combined_logs, "Local fallback mode"
-
-    combined_logs = "Backend job created:\n" + backend_log + "\n\nPolling backend for completion..."
+    # Run locally - original simple setup
+    code = render_code_from_spec(spec)
     
-    # Poll for completion
-    max_polls = 60
-    poll_interval = 2.0
-    for i in range(max_polls):
-        req = request.Request(f"{BACKEND_URL.rstrip('/')}/v1/jobs/{job_id}", headers={"x-api-key": BACKEND_API_KEY} if BACKEND_API_KEY else {})
-        try:
-            with request.urlopen(req, timeout=BACKEND_TIMEOUT_SECONDS) as response:
-                current_job = json.loads(response.read().decode())
-
-                status = current_job.get("status")
-                if status in ("completed", "failed"):
-                    job_data = current_job
-                    break
-                
-                time.sleep(poll_interval)
-        except Exception as exc:
-            combined_logs += f"\nPoll error: {exc}"
-            time.sleep(poll_interval)
-            
-    if job_data.get("status") != "completed":
-        combined_logs += f"\n\nJob ended with status: {job_data.get('status')}"
-        return None, None, None, combined_logs, "Backend generation failed or timed out."
-
-    # Process artifacts from the completed job
-    artifacts = job_data.get("artifacts", [])
-    glb_url = next((a.get("url") for a in artifacts if a.get("kind") == "glb"), None)
-    stl_url = next((a.get("url") for a in artifacts if a.get("kind") == "stl"), None)
-    step_url = next((a.get("url") for a in artifacts if a.get("kind") == "step"), None)
+    # Create job file for local CAD
+    run_dir = Path("artifacts/runs")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    script_path = run_dir / f"{job_id}.py"
+    script_path.write_text(code)
     
-    combined_logs += "\n\nJob completed successfully."
-    if job_data.get("notes"):
-        combined_logs += "\n\nBackend Notes:\n" + "\n".join(job_data["notes"])
-        
+    # Run build123d locally
+    glb_path, stl_path, step_path, logs, summary, run_id, execution_seconds = run_build123d(code, prompt)
+    
+    # Upload artifacts to backend
+    upload_log = ""
+    if stl_path:
+        _, uplog = upload_job_artifact(job_id, "stl", stl_path)
+        upload_log += f"STL: {uplog[:100]}\n"
+    if step_path:
+        _, uplog = upload_job_artifact(job_id, "step", step_path)
+        upload_log += f"STEP: {uplog[:100]}\n"
+    
+    combined_logs = f"Local generation complete.\n{logs}\n\n{upload_log}"
     final_summary = "Model ready." if not client_notice else f"Model ready.\n\n⚠️ {client_notice}"
     
-    # We return the URLs for the Gradio components to download/display
-    return glb_url or stl_url, stl_url, step_url, combined_logs, final_summary
+    # Return local paths for Gradio
+    return stl_path, stl_path, step_path, combined_logs, final_summary
 
 
 def use_example(prompt: str, mode: str, output_type: str):
