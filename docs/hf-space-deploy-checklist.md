@@ -20,6 +20,21 @@ For the lean MVP, backend use should be optional, not assumed. If `NATURALCAD_BA
 
 If the Hugging Face Space runtime cannot support the CAD dependency stack cleanly, keep the Space as the frontend and offload execution to a container or VM.
 
+## Current hosted setup
+
+Space env:
+- variable: `NATURALCAD_BACKEND_URL`
+- secret: `NATURALCAD_API_KEY`
+
+Backend host:
+- current recommended host: Fly.io
+- current recommended backend port: `8000`
+- backend should expose `GET /v1/health`, `POST /v1/generate-spec`, `POST /v1/jobs`, and `POST /v1/jobs/{job_id}/artifacts`
+
+Runtime note:
+- the Space Docker image must include the native stack needed by `build123d` / `OCP`
+- current Dockerfile installs both `ocp=7.8.1` and `vtk=9.3` in the Conda env to avoid the missing `libvtkWrappingPythonCore3.10-9.3.so` runtime error
+
 ## Data to capture
 
 - timestamp

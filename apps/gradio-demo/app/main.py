@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import shutil
 import subprocess
@@ -17,6 +18,7 @@ from pathlib import Path
 from urllib import error, request
 
 import gradio as gr
+import trimesh
 
 BUILD123D_PYTHON = os.getenv("BUILD123D_PYTHON", sys.executable)
 BACKEND_URL = os.getenv("NATURALCAD_BACKEND_URL", os.getenv("NL_CAD_BACKEND_URL", "")).strip()
@@ -56,7 +58,74 @@ result = bp.part
 '''
 
 
+def _legacy_spec_from_semantic(spec: dict) -> dict:
+    if "geometry_family" in spec and "parameters" in spec:
+        return spec
+
+    family_hint = spec.get("family_hint") or {}
+    geometry = spec.get("geometry") or {}
+    semantic_part = spec.get("semantic_part") or {}
+    dimensions = dict(spec.get("dimensions") or {})
+    output_type = spec.get("output_type", "3d_solid")
+
+    geometry_family = family_hint.get("name")
+    if not geometry_family:
+        topology = " ".join(semantic_part.get("topology") or []).lower()
+        feature_types = " ".join((f.get("feature_type", "") for f in geometry.get("features") or [] if isinstance(f, dict))).lower()
+        if "truss" in topology or "truss" in feature_types or "span" in dimensions and "panel_count" in dimensions:
+            geometry_family = "truss_beam" if output_type != "2d_vector" else "truss_elevation"
+        elif output_type == "surface":
+            geometry_family = "canopy_surface"
+        elif "tower" in topology or "mass" in topology or "notch" in feature_types:
+            geometry_family = "tower_block"
+        else:
+            geometry_family = "bracket_plate"
+
+    params = dict(dimensions)
+    if output_type == "2d_vector":
+        params.setdefault("preview_thickness", 1)
+    if geometry_family == "bracket_plate":
+        params.setdefault("width", 80)
+        params.setdefault("height", 50)
+        params.setdefault("thickness", 6)
+        params.setdefault("hole_count", 4)
+        params.setdefault("hole_diameter", 10)
+    elif geometry_family == "truss_beam":
+        params.setdefault("span", 140)
+        params.setdefault("height", 24)
+        params.setdefault("panel_count", 7)
+        params.setdefault("member_size", 3)
+    elif geometry_family == "truss_elevation":
+        params.setdefault("span", 140)
+        params.setdefault("height", 24)
+        params.setdefault("panel_count", 7)
+        params.setdefault("member_size", 3)
+        params.setdefault("preview_thickness", 1)
+    elif geometry_family == "tower_block":
+        params.setdefault("width", 30)
+        params.setdefault("length", 30)
+        params.setdefault("height", 120)
+        params.setdefault("notch", 10)
+    elif geometry_family == "canopy_surface":
+        params.setdefault("span", 160)
+        params.setdefault("depth", 90)
+        params.setdefault("peak_height", 38)
+        params.setdefault("thickness", 2)
+    elif geometry_family == "lofted_panel":
+        params.setdefault("width", 80)
+        params.setdefault("depth", 50)
+        params.setdefault("rise", 18)
+        params.setdefault("thickness", 2)
+
+    return {
+        "geometry_family": geometry_family,
+        "output_type": output_type,
+        "parameters": params,
+    }
+
+
 def render_code_from_spec(spec: dict) -> str:
+    spec = _legacy_spec_from_semantic(spec)
     geometry_family = spec.get("geometry_family", "bracket_plate")
     output_type = spec.get("output_type", "3d_solid")
     params = spec.get("parameters", {})
@@ -258,16 +327,65 @@ def create_job(prompt: str, mode: str, output_type: str) -> tuple[dict | None, s
         return None, json.dumps({"error": f"backend unavailable: {exc}"}, indent=2)
 
 
+def upload_job_artifact(job_id: str, kind: str, path: str) -> tuple[dict | None, str]:
+    if not BACKEND_URL or not job_id:
+        return None, ""
+
+    file_path = Path(path)
+    if not file_path.exists():
+        return None, json.dumps({"error": f"artifact path missing: {path}"}, indent=2)
+
+    boundary = f"----naturalcad-{uuid.uuid4().hex}"
+    content_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+    file_bytes = file_path.read_bytes()
+
+    body = bytearray()
+    body.extend(f"--{boundary}\r\n".encode())
+    body.extend(b'Content-Disposition: form-data; name="kind"\r\n\r\n')
+    body.extend(kind.encode())
+    body.extend(b"\r\n")
+
+    body.extend(f"--{boundary}\r\n".encode())
+    body.extend(
+        f'Content-Disposition: form-data; name="file"; filename="{file_path.name}"\r\n'.encode()
+    )
+    body.extend(f"Content-Type: {content_type}\r\n\r\n".encode())
+    body.extend(file_bytes)
+    body.extend(b"\r\n")
+    body.extend(f"--{boundary}--\r\n".encode())
+
+    headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+    if BACKEND_API_KEY:
+        headers["x-api-key"] = BACKEND_API_KEY
+
+    req = request.Request(
+        f"{BACKEND_URL.rstrip('/')}/v1/jobs/{job_id}/artifacts",
+        data=bytes(body),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=BACKEND_TIMEOUT_SECONDS) as response:
+            data = json.loads(response.read().decode())
+            return data, json.dumps(data, indent=2)
+    except error.HTTPError as exc:
+        detail = exc.read().decode() if exc.fp else str(exc)
+        return None, json.dumps({"error": f"artifact upload http {exc.code}", "detail": detail}, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return None, json.dumps({"error": f"artifact upload failed: {exc}"}, indent=2)
+
+
 def _append_run_log(entry: dict) -> None:
     with RUN_LOG_PATH.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry) + "\n")
 
 
-def run_build123d(code: str, prompt: str = "") -> tuple[str | None, str | None, str, str, str | None, float]:
+def run_build123d(code: str, prompt: str = "") -> tuple[str | None, str | None, str | None, str, str, str | None, float]:
     if not code or not code.strip():
-        return None, None, "No code provided.", "No geometry was generated.", None, 0.0
+        return None, None, None, "No code provided.", "No geometry was generated.", None, 0.0
 
     logs: list[str] = []
+    glb_path: str | None = None
     stl_path: str | None = None
     step_path: str | None = None
     started_at = time.time()
@@ -278,6 +396,7 @@ def run_build123d(code: str, prompt: str = "") -> tuple[str | None, str | None, 
         source_file.write_text(code)
         stl_file = RUNS_DIR / f"{run_id}.stl"
         step_file = RUNS_DIR / f"{run_id}.step"
+        glb_file = RUNS_DIR / f"{run_id}.glb"
 
         logs.append(f"Run ID: {run_id}")
         if prompt.strip():
@@ -337,10 +456,24 @@ print("STEP exported to {step_file}")
             if result.returncode == 0 and stl_file.exists() and step_file.exists():
                 latest_stl = ARTIFACTS_DIR / "model.stl"
                 latest_step = ARTIFACTS_DIR / "model.step"
+                latest_glb = ARTIFACTS_DIR / "model.glb"
                 shutil.copy2(stl_file, latest_stl)
                 shutil.copy2(step_file, latest_step)
                 stl_path = str(latest_stl)
                 step_path = str(latest_step)
+
+                try:
+                    preview_mesh = trimesh.load_mesh(stl_file, force="mesh")
+                    preview_mesh.apply_transform(
+                        trimesh.transformations.rotation_matrix(-1.5707963267948966, [1, 0, 0])
+                    )
+                    preview_mesh.export(glb_file)
+                    shutil.copy2(glb_file, latest_glb)
+                    glb_path = str(latest_glb)
+                    logs.append(f"GLB preview exported to {latest_glb}")
+                except Exception as exc:  # noqa: BLE001
+                    logs.append(f"GLB preview export failed: {exc}")
+
                 logs.append(f"Export successful. Archived artifacts at runs/{run_id}.*")
             else:
                 logs.append(f"Runner exited with code {result.returncode}.")
@@ -352,7 +485,7 @@ print("STEP exported to {step_file}")
 
     duration = time.time() - started_at
     summary = f"Model ready in {duration:.2f}s."
-    return stl_path, step_path, "\n".join(logs), summary, run_id, duration
+    return glb_path, stl_path, step_path, "\n".join(logs), summary, run_id, duration
 
 
 def generate_from_prompt(prompt: str, mode: str, output_type: str):
@@ -394,14 +527,14 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
             return None, None, None, backend_log, "Backend created no CAD spec."
 
     code = render_code_from_spec(spec)
-    stl_path, step_path, logs, summary, run_id, execution_seconds = run_build123d(code, prompt)
+    glb_path, stl_path, step_path, logs, summary, run_id, execution_seconds = run_build123d(code, prompt)
     combined_logs = "\n\n".join([
         "Backend job created:" if backend_ok else "Backend unavailable, using local fallback:",
         backend_log,
         "Local execution log:",
         logs,
     ])
-    success = bool(stl_path)
+    success = bool(step_path and (glb_path or stl_path))
     _append_run_log({
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "run_id": run_id,
@@ -417,11 +550,25 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
         "execution_seconds": round(execution_seconds, 3),
         "error": None if success else "Generation failed.",
     })
-    if not stl_path:
+    if not step_path:
         return None, None, None, combined_logs, "Generation failed. Try a simpler prompt or an example."
 
+    job_id = str((job_data or {}).get("id", ""))
+    if backend_ok and job_id:
+        upload_logs: list[str] = []
+        _, stl_upload_log = upload_job_artifact(job_id, "stl", stl_path)
+        if stl_upload_log:
+            upload_logs.append("STL upload:\n" + stl_upload_log)
+        if step_path:
+            _, step_upload_log = upload_job_artifact(job_id, "step", step_path)
+            if step_upload_log:
+                upload_logs.append("STEP upload:\n" + step_upload_log)
+        if upload_logs:
+            combined_logs = "\n\n".join([combined_logs, "Artifact uploads:", *upload_logs])
+
     final_summary = summary if not client_notice else f"{summary}\n\n⚠️ {client_notice}"
-    return stl_path, stl_path, step_path, combined_logs, final_summary
+    preview_path = glb_path or stl_path
+    return preview_path, stl_path, step_path, combined_logs, final_summary
 
 
 def use_example(prompt: str, mode: str, output_type: str):

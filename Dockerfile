@@ -16,7 +16,7 @@ ENV HOME=/home/user \
 WORKDIR $HOME/app
 
 RUN conda create -n cad python=3.10 -y && \
-    conda install -n cad -c conda-forge ocp=7.8.1 -y && \
+    conda install -n cad -c conda-forge ocp=7.8.1 vtk=9.3 -y && \
     conda clean -a -y
 
 ENV PATH=$CONDA_DIR/envs/cad/bin:$PATH

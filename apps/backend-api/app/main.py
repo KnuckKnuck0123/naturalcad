@@ -1,28 +1,90 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import posixpath
 import re
 import time
 from typing import cast
 
-from fastapi import FastAPI, Header, HTTPException, Request
+import httpx
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 
 from .config import settings
 from .models import (
-    CadSpec,
-    CadStyle,
+    ArtifactKind,
+    ArtifactRecord,
+    ArtifactUploadResponse,
+    ConstraintRecord,
     CreateJobRequest,
+    DedupeHint,
+    FamilyHint,
     GenerateSpecRequest,
     GenerateSpecResponse,
+    GeometryFeature,
+    GeometryPlan,
     HealthResponse,
     JobRecord,
     ModeType,
     OutputType,
+    SemanticCadSpec,
+    SemanticPart,
+    SemanticStyle,
 )
+from .repository import create_artifact as repo_create_artifact
 from .repository import get_job as repo_get_job, save_job
+from .repository import list_artifacts as repo_list_artifacts
 from .store import _CACHE, _JOBS, _REQUESTS
 
 app = FastAPI(title=settings.app_name, version="0.4.0")
+
+
+def _storage_ready() -> bool:
+    return bool(settings.supabase_url and settings.supabase_service_role_key and settings.supabase_bucket)
+
+
+def _build_public_artifact_url(storage_key: str) -> str:
+    return f"{settings.supabase_url}/storage/v1/object/public/{settings.supabase_bucket}/{storage_key}"
+
+
+def _upload_bytes_to_supabase_storage(storage_key: str, blob: bytes, content_type: str) -> None:
+    if not _storage_ready():
+        raise HTTPException(status_code=503, detail="Artifact storage not configured")
+
+    url = f"{settings.supabase_url}/storage/v1/object/{settings.supabase_bucket}/{storage_key}"
+    headers = {
+        "apikey": settings.supabase_service_role_key,
+        "Authorization": f"Bearer {settings.supabase_service_role_key}",
+        "x-upsert": "true",
+        "content-type": content_type,
+    }
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.post(url, content=blob, headers=headers)
+    if resp.status_code >= 300:
+        raise HTTPException(status_code=502, detail=f"Supabase upload failed: {resp.text[:300]}")
+
+
+def _artifact_url_for(storage_key: str) -> str | None:
+    if not settings.supabase_url:
+        return None
+    return _build_public_artifact_url(storage_key)
+
+
+def _artifact_to_record(row: dict) -> ArtifactRecord:
+    return ArtifactRecord(
+        id=str(row.get("id")),
+        job_id=str(row.get("job_id")),
+        kind=cast(ArtifactKind, row.get("kind", "other")),
+        storage_key=str(row.get("storage_key")),
+        size_bytes=row.get("size_bytes"),
+        url=_artifact_url_for(str(row.get("storage_key"))),
+        created_at=row.get("created_at"),
+    )
+
+
+def _job_with_artifacts(job: dict) -> JobRecord:
+    artifacts = [_artifact_to_record(a) for a in repo_list_artifacts(str(job["id"]))]
+    return JobRecord(**job, artifacts=artifacts)
 
 
 def _check_auth(header_value: str | None) -> None:
@@ -114,114 +176,191 @@ def _extract_count(prompt: str, nouns: list[str], default: int) -> int:
     return default
 
 
-def _style_from_prompt(prompt: str, default_family: str) -> CadStyle:
-    heaviness = 0.6
-    family = default_family
-    if any(word in prompt for word in ["heavy", "massive", "thick", "brutal"]):
-        heaviness = 0.85
-    elif any(word in prompt for word in ["light", "slim", "thin", "delicate"]):
-        heaviness = 0.35
-
-    if any(word in prompt for word in ["industrial", "steel", "metal"]):
-        family = "industrial"
-    elif any(word in prompt for word in ["structural", "truss", "frame"]):
-        family = "structural"
-    elif any(word in prompt for word in ["smooth", "soft", "shell", "canopy"]):
-        family = "smooth"
-    elif any(word in prompt for word in ["diagram", "profile", "elevation", "line"]):
-        family = "diagrammatic"
-
-    return CadStyle(family=family, heaviness=heaviness)
+def _style_keywords_from_prompt(prompt: str, default_keyword: str) -> list[str]:
+    keywords = [default_keyword]
+    for word in ["industrial", "structural", "smooth", "diagrammatic", "heavy-duty", "lightweight", "architectural"]:
+        if word in prompt and word not in keywords:
+            keywords.append(word)
+    if any(word in prompt for word in ["steel", "metal", "brutal"]):
+        keywords.append("industrial")
+    if any(word in prompt for word in ["truss", "frame", "girder"]):
+        keywords.append("structural")
+    if any(word in prompt for word in ["roof", "canopy", "shell"]):
+        keywords.append("smooth")
+    return list(dict.fromkeys(keywords))
 
 
-def _infer_spec(prompt: str, mode: ModeType, output_type: OutputType) -> CadSpec:
+def _infer_semantic_spec(prompt: str, mode: ModeType, output_type: OutputType) -> SemanticCadSpec:
     p = prompt.lower()
 
     if output_type == "2d_vector" or mode == "sketch":
         family = "truss_elevation" if any(word in p for word in ["truss", "beam", "frame", "elevation"]) else "plate_profile"
         if family == "truss_elevation":
-            params = {
+            dimensions = {
                 "span": _extract_number(p, ["span", "length", "width"], 140),
                 "height": _extract_number(p, ["height", "rise"], 24),
                 "panel_count": _extract_count(p, ["panels", "bays", "segments"], 7),
                 "member_size": _extract_number(p, ["member", "thickness", "depth"], 3),
                 "preview_thickness": 1,
             }
+            geometry = GeometryPlan(
+                primitive_strategy=["sketch", "extrude"],
+                features=[
+                    GeometryFeature(name="chords", feature_type="parallel_members", count=2),
+                    GeometryFeature(name="posts", feature_type="vertical_members", count=int(dimensions["panel_count"]) + 1),
+                ],
+            )
+            semantic_part = SemanticPart(category="diagram", function="structural elevation", topology=["top chord", "bottom chord", "posts"], symmetry="bilateral")
         else:
-            params = {
+            dimensions = {
                 "width": _extract_number(p, ["width", "span"], 80),
                 "height": _extract_number(p, ["height"], 50),
                 "hole_count": _extract_count(p, ["holes", "bolt holes", "openings"], 4),
                 "hole_diameter": _extract_number(p, ["hole diameter", "hole", "diameter"], 10),
                 "preview_thickness": 1,
             }
-        return CadSpec(
+            geometry = GeometryPlan(
+                primitive_strategy=["sketch", "extrude"],
+                features=[
+                    GeometryFeature(name="base_profile", feature_type="rectangle"),
+                    GeometryFeature(name="holes", feature_type="circular_cutouts", count=int(dimensions["hole_count"])),
+                ],
+            )
+            semantic_part = SemanticPart(category="profile", function="cut pattern", topology=["base plate", "openings"], symmetry="bilateral")
+        return SemanticCadSpec(
+            intent=prompt.strip(),
+            mode=mode,
             output_type="2d_vector",
-            geometry_family=family,
-            parameters=params,
-            style=_style_from_prompt(p, "diagrammatic"),
+            semantic_part=semantic_part,
+            family_hint=FamilyHint(name=family, generation_mode="reuse", confidence=0.75, novelty_score=0.25),
+            geometry=geometry,
+            dimensions=dimensions,
+            constraints=[],
+            style=SemanticStyle(keywords=_style_keywords_from_prompt(p, "diagrammatic"), symmetry=semantic_part.symmetry, manufacturing_bias="sheet_metal"),
+            dedupe=DedupeHint(canonical_signature=f"{family}|{sorted(dimensions.items())}"),
+            notes=["Concept-grade sketch/profile interpretation."],
         )
 
     if output_type == "surface":
         family = "canopy_surface" if any(word in p for word in ["roof", "canopy", "shell", "surface"]) else "lofted_panel"
         if family == "canopy_surface":
-            params = {
+            dimensions = {
                 "span": _extract_number(p, ["span", "width"], 160),
                 "depth": _extract_number(p, ["depth", "length"], 90),
                 "peak_height": _extract_number(p, ["peak", "height", "rise"], 38),
                 "thickness": _extract_number(p, ["thickness"], 2),
             }
+            features = [
+                GeometryFeature(name="base_section", feature_type="rectangle_profile"),
+                GeometryFeature(name="top_section", feature_type="scaled_rectangle_profile"),
+            ]
+            topology = ["base perimeter", "raised perimeter", "lofted shell"]
         else:
-            params = {
+            dimensions = {
                 "width": _extract_number(p, ["width", "span"], 80),
                 "depth": _extract_number(p, ["depth", "length"], 50),
                 "rise": _extract_number(p, ["rise", "height"], 18),
                 "thickness": _extract_number(p, ["thickness"], 2),
             }
-        return CadSpec(
+            features = [
+                GeometryFeature(name="lower_frame", feature_type="rectangle_profile"),
+                GeometryFeature(name="upper_frame", feature_type="scaled_rectangle_profile"),
+            ]
+            topology = ["lower frame", "upper frame", "lofted skin"]
+        return SemanticCadSpec(
+            intent=prompt.strip(),
+            mode=mode,
             output_type="surface",
-            geometry_family=family,
-            parameters=params,
-            style=_style_from_prompt(p, "smooth"),
+            semantic_part=SemanticPart(category="surface", function="enclosure/canopy", topology=topology, symmetry="bilateral"),
+            family_hint=FamilyHint(name=family, generation_mode="extend", confidence=0.7, novelty_score=0.45),
+            geometry=GeometryPlan(primitive_strategy=["loft", "offset"], features=features),
+            dimensions=dimensions,
+            constraints=[ConstraintRecord(kind="min", target="thickness", value=1.0)],
+            style=SemanticStyle(keywords=_style_keywords_from_prompt(p, "smooth"), symmetry="bilateral", manufacturing_bias="generic"),
+            dedupe=DedupeHint(canonical_signature=f"{family}|{sorted(dimensions.items())}"),
+            notes=["Surface interpretation remains concept-grade and may simplify shell behavior."],
         )
 
     if any(word in p for word in ["truss", "beam", "frame", "girder"]):
-        return CadSpec(
+        dimensions = {
+            "span": _extract_number(p, ["span", "length"], 140),
+            "height": _extract_number(p, ["height", "rise"], 24),
+            "panel_count": _extract_count(p, ["panels", "bays", "segments"], 7),
+            "member_size": _extract_number(p, ["member", "thickness", "depth"], 3),
+        }
+        return SemanticCadSpec(
+            intent=prompt.strip(),
+            mode=mode,
             output_type="3d_solid",
-            geometry_family="truss_beam",
-            parameters={
-                "span": _extract_number(p, ["span", "length"], 140),
-                "height": _extract_number(p, ["height", "rise"], 24),
-                "panel_count": _extract_count(p, ["panels", "bays", "segments"], 7),
-                "member_size": _extract_number(p, ["member", "thickness", "depth"], 3),
-            },
-            style=_style_from_prompt(p, "structural"),
+            semantic_part=SemanticPart(category="structure", function="spanning member", topology=["top chord", "bottom chord", "posts"], symmetry="bilateral"),
+            family_hint=FamilyHint(name="truss_beam", generation_mode="reuse", confidence=0.82, novelty_score=0.28),
+            geometry=GeometryPlan(
+                primitive_strategy=["extrude", "array", "boolean_compound"],
+                features=[
+                    GeometryFeature(name="top_chord", feature_type="beam_member"),
+                    GeometryFeature(name="bottom_chord", feature_type="beam_member"),
+                    GeometryFeature(name="posts", feature_type="vertical_members", count=int(dimensions["panel_count"]) + 1),
+                ],
+            ),
+            dimensions=dimensions,
+            constraints=[ConstraintRecord(kind="min", target="panel_count", value=3)],
+            style=SemanticStyle(keywords=_style_keywords_from_prompt(p, "structural"), symmetry="bilateral", manufacturing_bias="machined"),
+            dedupe=DedupeHint(canonical_signature=f"truss_beam|{sorted(dimensions.items())}"),
+            notes=["Maps to the current truss generator for execution."],
         )
 
     if any(word in p for word in ["tower", "block", "monolith"]):
-        return CadSpec(
+        dimensions = {
+            "width": _extract_number(p, ["width"], 30),
+            "length": _extract_number(p, ["length", "depth"], 30),
+            "height": _extract_number(p, ["height"], 120),
+            "notch": _extract_number(p, ["notch", "cut"], 10),
+        }
+        return SemanticCadSpec(
+            intent=prompt.strip(),
+            mode=mode,
             output_type="3d_solid",
-            geometry_family="tower_block",
-            parameters={
-                "width": _extract_number(p, ["width"], 30),
-                "length": _extract_number(p, ["length", "depth"], 30),
-                "height": _extract_number(p, ["height"], 120),
-                "notch": _extract_number(p, ["notch", "cut"], 10),
-            },
-            style=_style_from_prompt(p, "industrial"),
+            semantic_part=SemanticPart(category="mass", function="vertical block study", topology=["primary mass", "subtractive notches"], symmetry="bilateral"),
+            family_hint=FamilyHint(name="tower_block", generation_mode="extend", confidence=0.74, novelty_score=0.52),
+            geometry=GeometryPlan(
+                primitive_strategy=["box", "boolean_subtract"],
+                features=[
+                    GeometryFeature(name="main_mass", feature_type="box"),
+                    GeometryFeature(name="notches", feature_type="subtractive_blocks", count=2),
+                ],
+            ),
+            dimensions=dimensions,
+            constraints=[],
+            style=SemanticStyle(keywords=_style_keywords_from_prompt(p, "industrial"), symmetry="bilateral", manufacturing_bias="generic"),
+            dedupe=DedupeHint(canonical_signature=f"tower_block|{sorted(dimensions.items())}"),
+            notes=["Keeps tower prompts broad while still routing to the existing massing generator."],
         )
 
-    return CadSpec(
+    dimensions = {
+        "width": _extract_number(p, ["width", "span"], 80),
+        "height": _extract_number(p, ["height"], 50),
+        "thickness": _extract_number(p, ["thickness"], 6),
+        "hole_count": _extract_count(p, ["holes", "bolt holes", "openings"], 4),
+        "hole_diameter": _extract_number(p, ["hole diameter", "hole", "diameter"], 10),
+    }
+    return SemanticCadSpec(
+        intent=prompt.strip(),
+        mode=mode,
         output_type="3d_solid",
-        geometry_family="bracket_plate",
-        parameters={
-            "width": _extract_number(p, ["width", "span"], 80),
-            "height": _extract_number(p, ["height"], 50),
-            "thickness": _extract_number(p, ["thickness"], 6),
-            "hole_count": _extract_count(p, ["holes", "bolt holes", "openings"], 4),
-            "hole_diameter": _extract_number(p, ["hole diameter", "hole", "diameter"], 10),
-        },
-        style=_style_from_prompt(p, "industrial"),
+        semantic_part=SemanticPart(category="support", function="mounting/support part", topology=["plate body", "openings"], symmetry="bilateral"),
+        family_hint=FamilyHint(name="bracket_plate", generation_mode="extend", confidence=0.6, novelty_score=0.58),
+        geometry=GeometryPlan(
+            primitive_strategy=["extrude", "boolean_subtract"],
+            features=[
+                GeometryFeature(name="base_plate", feature_type="rectangular_plate"),
+                GeometryFeature(name="holes", feature_type="circular_cutouts", count=int(dimensions["hole_count"])),
+            ],
+        ),
+        dimensions=dimensions,
+        constraints=[ConstraintRecord(kind="min", target="thickness", value=2.0)],
+        style=SemanticStyle(keywords=_style_keywords_from_prompt(p, "industrial"), symmetry="bilateral", manufacturing_bias="machined"),
+        dedupe=DedupeHint(canonical_signature=f"bracket_plate|{sorted(dimensions.items())}"),
+        notes=["Default concept-grade support interpretation. Replace with true model output later for broader novelty."],
     )
 
 
@@ -257,12 +396,13 @@ def _generate_spec(payload: GenerateSpecRequest) -> GenerateSpecResponse:
             "Using conservative defaults and a simple geometry family.",
         ])
 
-    spec = _infer_spec(safe_prompt, payload.mode, payload.output_type)
+    spec = _infer_semantic_spec(safe_prompt, payload.mode, payload.output_type)
     response = GenerateSpecResponse(
         prompt_hash=key,
         spec=spec,
         notes=notes + [
-            "Prompt mapped into a structured CAD spec.",
+            "Prompt mapped into a structured compositional CAD spec.",
+            "This is still a stub translator, not the final model stage.",
             "Replace the stub router with a real HF endpoint later.",
         ],
         suspicious_input=suspicious_input,
@@ -314,6 +454,7 @@ def create_job(payload: CreateJobRequest, request: Request, x_api_key: str | Non
     )
     job.status = cast(str, "queued")
     save_job(job)
+    job.artifacts = []
     return job
 
 
@@ -323,7 +464,38 @@ def get_job(job_id: str, x_api_key: str | None = Header(default=None)) -> JobRec
     job = repo_get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return JobRecord(**job)
+    return _job_with_artifacts(job)
+
+
+@app.post("/v1/jobs/{job_id}/artifacts", response_model=ArtifactUploadResponse)
+async def upload_job_artifact(
+    job_id: str,
+    kind: ArtifactKind = Form(...),
+    file: UploadFile = File(...),
+    x_api_key: str | None = Header(default=None),
+) -> ArtifactUploadResponse:
+    _check_auth(x_api_key)
+
+    job = repo_get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not _storage_ready():
+        raise HTTPException(status_code=503, detail="Supabase storage not configured")
+
+    blob = await file.read()
+    if not blob:
+        raise HTTPException(status_code=400, detail="Empty file upload")
+    if len(blob) > settings.storage_max_upload_bytes:
+        raise HTTPException(status_code=413, detail="File too large for configured upload limit")
+
+    suffix = os.path.splitext(file.filename or "")[1].lower()
+    safe_suffix = suffix if suffix in {".stl", ".step", ".stp", ".png", ".jpg", ".jpeg", ".webp"} else ""
+    storage_key = posixpath.join("jobs", job_id, f"{kind}{safe_suffix}")
+    content_type = file.content_type or "application/octet-stream"
+
+    _upload_bytes_to_supabase_storage(storage_key, blob, content_type)
+    saved = repo_create_artifact(job_id, kind, storage_key, len(blob))
+    return ArtifactUploadResponse(artifact=_artifact_to_record(saved))
 
 
 @app.get("/")
