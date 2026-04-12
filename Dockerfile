@@ -20,6 +20,7 @@ RUN conda create -n cad python=3.10 -y && \
     conda clean -a -y
 
 ENV PATH=$CONDA_DIR/envs/cad/bin:$PATH
+ENV LD_LIBRARY_PATH=$CONDA_DIR/envs/cad/lib:$LD_LIBRARY_PATH
 
 RUN pip install --no-cache-dir --upgrade pip
 
