@@ -496,32 +496,12 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
 
     job_id = str((job_data or {}).get("id", ""))
     
-    # Run locally - original simple setup
+    # Return the generated code as text instead of trying to run
     code = render_code_from_spec(spec)
+    combined_logs = f"Generated build123d code:\n\n{code}\n\nCopy this to a machine with build123d installed to run."
+    final_summary = "Code ready. Run it locally with build123d."
     
-    # Create job file for local CAD
-    run_dir = Path("artifacts/runs")
-    run_dir.mkdir(parents=True, exist_ok=True)
-    script_path = run_dir / f"{job_id}.py"
-    script_path.write_text(code)
-    
-    # Run build123d locally
-    glb_path, stl_path, step_path, logs, summary, run_id, execution_seconds = run_build123d(code, prompt)
-    
-    # Upload artifacts to backend
-    upload_log = ""
-    if stl_path:
-        _, uplog = upload_job_artifact(job_id, "stl", stl_path)
-        upload_log += f"STL: {uplog[:100]}\n"
-    if step_path:
-        _, uplog = upload_job_artifact(job_id, "step", step_path)
-        upload_log += f"STEP: {uplog[:100]}\n"
-    
-    combined_logs = f"Local generation complete.\n{logs}\n\n{upload_log}"
-    final_summary = "Model ready." if not client_notice else f"Model ready.\n\n⚠️ {client_notice}"
-    
-    # Return local paths for Gradio
-    return stl_path, stl_path, step_path, combined_logs, final_summary
+    return code, code, code, combined_logs, final_summary
 
 
 def use_example(prompt: str, mode: str, output_type: str):
