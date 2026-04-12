@@ -1,4 +1,4 @@
-FROM continuumio/miniconda3:latest
+FROM condaforge/miniforge3:latest
 
 RUN apt-get update && apt-get install -y \
     libgl1 \
@@ -15,8 +15,10 @@ ENV HOME=/home/user \
 
 WORKDIR $HOME/app
 
-RUN conda create -n cad python=3.10 -y && \
-    conda install -n cad -c conda-forge ocp=7.8.1 -y && \
+RUN conda config --system --remove-key channels || true && \
+    conda config --system --add channels conda-forge && \
+    conda config --system --set channel_priority strict && \
+    conda create -n cad python=3.10 ocp=7.8.1 -y && \
     conda clean -a -y
 
 ENV PATH=$CONDA_DIR/envs/cad/bin:$PATH
