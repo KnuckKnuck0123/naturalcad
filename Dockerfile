@@ -1,57 +1,34 @@
-FROM condaforge/miniforge3:latest
+FROM python:3.10-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HOME=/home/appuser \
+    PATH=/home/appuser/.local/bin:$PATH
 
 RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    git \
     libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-ENV HOME=/home/conda \
-    PATH=/home/conda/.local/bin:$PATH \
-    CONDA_DIR=/opt/conda
-
+RUN useradd -m -u 1000 appuser
+USER appuser
 WORKDIR $HOME/app
 
-RUN conda config --system --remove-key channels || true && \
-    conda config --system --add channels conda-forge && \
-    conda config --system --set channel_priority strict && \
-    conda create -n cad python=3.10 ocp=7.8.1 -y && \
-    conda clean -a -y
+RUN python -m pip install --upgrade pip setuptools wheel
 
-ENV PATH=$CONDA_DIR/envs/cad/bin:$PATH
-ENV LD_LIBRARY_PATH=$CONDA_DIR/envs/cad/lib:$LD_LIBRARY_PATH
-
-RUN pip install --no-cache-dir --upgrade pip
-
-# Install all the python dependencies of build123d manually, except cadquery-ocp
-RUN pip install --no-cache-dir \
-    "typing_extensions<5,>=4.6.0" \
-    "numpy" \
-    "svgpathtools<2,>=1.5.1" \
-    "anytree<3,>=2.8.0" \
-    "ezdxf<2,>=1.1.0" \
-    "ipython<10,>=8.0.0" \
-    "lib3mf>=2.4.1" \
-    "ocpsvg<0.6,>=0.5" \
-    "ocp_gordon>=0.1.17" \
-    "trianglesolver" \
-    "sympy" \
-    "scipy" \
-    "webcolors"
-
-# Now install build123d without letting it try to pull cadquery-ocp
-RUN pip install --no-cache-dir --no-deps build123d==0.10.0
+COPY --chown=appuser requirements.txt .
+RUN pip install -r requirements.txt
 
 # Smoke test the CAD runtime during image build so bad native combos fail early
 RUN python -c "from build123d import export_stl, export_step; print('build123d import ok')"
 
-COPY --chown=user requirements.txt .
-# Remove build123d from pip requirements since we just handled it
-RUN grep -v "build123d" requirements.txt > reqs_no_cad.txt && \
-    pip install --no-cache-dir -r reqs_no_cad.txt
-
 RUN mkdir -p artifacts/runs artifacts/logs
 
-COPY --chown=user . .
+COPY --chown=appuser . .
 
 EXPOSE 7860
-CMD ["/opt/conda/envs/cad/bin/python", "app.py"]
+CMD ["python", "app.py"]
