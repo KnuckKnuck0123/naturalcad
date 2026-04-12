@@ -96,7 +96,8 @@ def create_artifact(job_id: str, kind: str, storage_key: str, size_bytes: int | 
             "size_bytes": size_bytes,
             "created_at": None,
         }
-        _ARTIFACTS[job_id].append(row)
+                _ARTIFACTS[job_id].append(row)
+        row["url"] = None
         return row
 
     with connect() as conn:

@@ -16,6 +16,10 @@ primary_region = 'ord'
   min_machines_running = 0
   processes = ['app']
 
+[processes]
+  app = "/app/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000"
+  worker = "/app/.venv/bin/python -m app.worker"
+
 [[vm]]
   memory = '1gb'
   cpus = 1
