@@ -33,9 +33,8 @@ Backend host:
 
 Runtime note:
 - the Space Docker image must include the native stack needed by `build123d` / `OCP`
-- current Dockerfile uses a conda-forge-native base image (`condaforge/miniforge3`) and strict `conda-forge` channel priority to avoid ABI mismatches between `defaults` and `conda-forge`
-- current Dockerfile installs `ocp=7.8.1` in the Conda env and avoids a separate explicit `vtk` pin, because that introduced ABI mismatch symptoms in the Space runtime
-- current Dockerfile also exports `LD_LIBRARY_PATH=/opt/conda/envs/cad/lib:$LD_LIBRARY_PATH` so the runtime can actually find the native shared libraries during `build123d` execution
+- final stabilization attempt uses a pure `python:3.10-slim` + `pip` runtime instead of the mixed Conda/OCP path
+- the goal is to let `build123d` resolve one coherent wheel stack directly, instead of mixing `conda` native packages with `pip` Python packages
 - current Dockerfile includes a `build123d` import smoke test during image build so broken native combinations fail earlier
 
 ## Data to capture
