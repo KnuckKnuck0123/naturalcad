@@ -548,6 +548,20 @@ async def upload_job_artifact(
     return ArtifactUploadResponse(artifact=_artifact_to_record(saved))
 
 
+@app.post("/v1/generate")
+def generate_and_return(request: GenerateSpecRequest, x_api_key: str | None = Header(default=None)):
+    _check_auth(x_api_key)
+    
+    # Generate spec using existing endpoint
+    spec = _generate_spec(request)
+    
+    # Generate build123d code
+    code = render_code_from_spec(spec.model_dump())
+    
+    # Return the code as text
+    return {"code": code, "status": "ready"}
+
+
 @app.get("/")
 def root() -> dict[str, str]:
     return {

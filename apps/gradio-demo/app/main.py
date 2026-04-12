@@ -458,49 +458,40 @@ mesh.export(str(glb_file))
 
 def generate_from_prompt(prompt: str, mode: str, output_type: str):
     started_at = time.time()
-    backend_ok = True
-    client_notice = None
-    fallback_level = "normal"
-    suspicious_input = False
-    job_data, backend_log = create_job(prompt, mode, output_type)
-    if job_data is None:
-        backend_ok = False
-        backend_log = backend_log or "Backend request failed."
-        spec = {
-            "output_type": output_type,
-            "geometry_family": "bracket_plate",
-            "parameters": {},
-        }
-        client_notice = "Backend was unavailable or disabled, so NaturalCAD used a simple local fallback."
-        fallback_level = "backend_unavailable"
-    else:
-        spec = job_data.get("spec")
-        suspicious_input = bool(job_data.get("suspicious_input", False))
-        fallback_level = job_data.get("fallback_level", "normal")
-        if suspicious_input:
-            client_notice = "Your prompt looked partly like code or unsafe instructions, so NaturalCAD used a safer interpretation for this run."
-        elif fallback_level == "underspecified":
-            client_notice = "Your prompt was pretty open-ended, so NaturalCAD filled in conservative defaults for this run."
-
-        if not spec:
-            _append_run_log({
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "prompt": prompt,
-                "mode": mode,
-                "output_type": output_type,
-                "backend_ok": backend_ok,
-                "success": False,
-                "error": "Backend created no CAD spec.",
-            })
-            return None, None, None, backend_log, "Backend created no CAD spec."
-
-    job_id = str((job_data or {}).get("id", ""))
     
-    # Return the generated code as text instead of trying to run
+    # Call the new /v1/generate endpoint on Fly
+    if BACKEND_URL:
+        payload = json.dumps({"prompt": prompt, "mode": mode, "output_type": output_type}).encode()
+        headers = {"Content-Type": "application/json"}
+        if BACKEND_API_KEY:
+            headers["x-api-key"] = BACKEND_API_KEY
+        
+        req = request.Request(
+            f"{BACKEND_URL.rstrip('/')}/v1/generate",
+            data=payload,
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with request.urlopen(req, timeout=BACKEND_TIMEOUT_SECONDS) as response:
+                result = json.loads(response.read().decode())
+                code = result.get("code", "")
+                if code:
+                    combined_logs = f"Generated build123d code:\n\n{code}"
+                    final_summary = "Code ready. Copy and run locally with build123d."
+                    return code, code, code, combined_logs, final_summary
+        except Exception as exc:
+            pass
+    
+    # Fallback to local spec generation
+    spec = {
+        "output_type": output_type,
+        "geometry_family": "bracket_plate",
+        "parameters": {"width": 60, "height": 40, "thickness": 6},
+    }
     code = render_code_from_spec(spec)
-    combined_logs = f"Generated build123d code:\n\n{code}\n\nCopy this to a machine with build123d installed to run."
-    final_summary = "Code ready. Run it locally with build123d."
-    
+    combined_logs = f"Local fallback:\n{code}"
+    final_summary = "Code generated."
     return code, code, code, combined_logs, final_summary
 
 
