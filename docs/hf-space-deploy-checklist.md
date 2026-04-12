@@ -33,7 +33,8 @@ Backend host:
 
 Runtime note:
 - the Space Docker image must include the native stack needed by `build123d` / `OCP`
-- current Dockerfile installs both `ocp=7.8.1` and `vtk=9.3` in the Conda env to avoid the missing `libvtkWrappingPythonCore3.10-9.3.so` runtime error
+- current Dockerfile installs both `ocp=7.8.1` and `vtk=9.3` in the Conda env
+- current Dockerfile also exports `LD_LIBRARY_PATH=/opt/conda/envs/cad/lib:$LD_LIBRARY_PATH` so the runtime can actually find the VTK shared libraries during `build123d` execution
 
 ## Data to capture
 
