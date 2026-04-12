@@ -2,6 +2,10 @@
   "name": "live-visualizer",
   "private": true,
   "version": "0.1.0",
+  "scripts": {
+    "backend:local": "./scripts/run-local-backend.sh",
+    "frontend:local": "./scripts/run-local-frontend.sh"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"

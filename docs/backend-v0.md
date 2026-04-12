@@ -235,6 +235,28 @@ Recommendation:
 ### Phase 4
 - tighten retention, add auth tiers, add cancellation, add preview generation
 
+## Spec direction for the next phase
+
+NaturalCAD should move next toward a **loose compositional / semantic JSON spec** rather than a rigid family-first schema.
+
+Reason:
+- rigid family routing too early will bias the model toward repetitive safe defaults
+- concept-grade generation needs room for novelty, unexpected topology, and broader prompt coverage
+- reuse and dedupe should exist, but as later optimization layers rather than the main creative frame
+
+Recommended next spec target:
+- `intent`
+- `semantic_part`
+- `family_hint` (optional, not dominant)
+- `geometry`
+- `dimensions`
+- `constraints`
+- `style`
+- `dedupe`
+
+Reference:
+- `docs/compositional-spec-v1.1.md`
+
 ## What not to do in v0
 
 - no public arbitrary Python execution
