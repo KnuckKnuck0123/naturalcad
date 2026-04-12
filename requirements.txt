@@ -1,3 +1,2 @@
 gradio>=4.0.0
 trimesh
-build123d==0.10.0
