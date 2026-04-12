@@ -424,16 +424,56 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
 
     job_id = str((job_data or {}).get("id", ""))
     
-    # Temporary: if backend seems slow/unresponsive, run locally
-    code = render_code_from_spec(spec)
-    glb_path, stl_path, step_path, logs, summary, run_id, execution_seconds = run_build123d_mock(code, prompt)
-    combined_logs = "\n\n".join([
-        "Backend job created:",
-        backend_log,
-        "Local fallback (worker debugging in progress):",
-        logs,
-    ])
-    return None, None, None, combined_logs, "Local fallback since worker is still initializing"
+    if not backend_ok or not job_id:
+        code = render_code_from_spec(spec)
+        glb_path, stl_path, step_path, logs, summary, run_id, execution_seconds = run_build123d_mock(code, prompt)
+        combined_logs = "\n\n".join([
+            "Backend unavailable, using local fallback:",
+            backend_log,
+            "Local execution log:",
+            logs,
+        ])
+        return None, None, None, combined_logs, "Local fallback mode"
+
+    combined_logs = "Backend job created:\n" + backend_log + "\n\nPolling backend for completion..."
+    
+    # Poll for completion
+    max_polls = 60
+    poll_interval = 2.0
+    for i in range(max_polls):
+        req = request.Request(f"{BACKEND_URL.rstrip('/')}/v1/jobs/{job_id}", headers={"x-api-key": BACKEND_API_KEY} if BACKEND_API_KEY else {})
+        try:
+            with request.urlopen(req, timeout=BACKEND_TIMEOUT_SECONDS) as response:
+                current_job = json.loads(response.read().decode())
+
+                status = current_job.get("status")
+                if status in ("completed", "failed"):
+                    job_data = current_job
+                    break
+                
+                time.sleep(poll_interval)
+        except Exception as exc:
+            combined_logs += f"\nPoll error: {exc}"
+            time.sleep(poll_interval)
+            
+    if job_data.get("status") != "completed":
+        combined_logs += f"\n\nJob ended with status: {job_data.get('status')}"
+        return None, None, None, combined_logs, "Backend generation failed or timed out."
+
+    # Process artifacts from the completed job
+    artifacts = job_data.get("artifacts", [])
+    glb_url = next((a.get("url") for a in artifacts if a.get("kind") == "glb"), None)
+    stl_url = next((a.get("url") for a in artifacts if a.get("kind") == "stl"), None)
+    step_url = next((a.get("url") for a in artifacts if a.get("kind") == "step"), None)
+    
+    combined_logs += "\n\nJob completed successfully."
+    if job_data.get("notes"):
+        combined_logs += "\n\nBackend Notes:\n" + "\n".join(job_data["notes"])
+        
+    final_summary = "Model ready." if not client_notice else f"Model ready.\n\n⚠️ {client_notice}"
+    
+    # We return the URLs for the Gradio components to download/display
+    return glb_url or stl_url, stl_url, step_url, combined_logs, final_summary
 
 
 def use_example(prompt: str, mode: str, output_type: str):
