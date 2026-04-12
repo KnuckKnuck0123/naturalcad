@@ -31,6 +31,54 @@ from .models import (
     SemanticPart,
     SemanticStyle,
 )
+
+# Stub renderer for worker - generates a simple bracket plate
+def render_code_from_spec(spec: dict) -> str:
+    # Normalize to legacy format for rendering
+    spec = _legacy_spec_from_semantic(spec)
+    geometry_family = spec.get("geometry_family", "bracket_plate")
+    output_type = spec.get("output_type", "3d_solid")
+    params = spec.get("parameters", {})
+    
+    width = params.get("width", 60)
+    height = params.get("height", 40)
+    thickness = params.get("thickness", 6)
+    return f'''from build123d import *
+
+width = {width}
+height = {height}
+with BuildPart() as bp:
+    with BuildSketch(Plane.XY) as base:
+        Rectangle(width, height)
+    extrude(amount={thickness})
+
+result = bp.part
+'''
+
+
+def _legacy_spec_from_semantic(spec: dict) -> dict:
+    """Bridge v1.1 semantic spec to legacy family + parameters."""
+    if spec.get("spec_version") == "1.1":
+        semantic = spec.get("semantic_parts", [])[0] if spec.get("semantic_parts") else {}
+        geometry = semantic.get("geometry", {})
+        dims = geometry.get("dimensions", {})
+        
+        family_hint = spec.get("family_hint", {}).get("preferred", "bracket_plate")
+        params = {}
+        if dims:
+            params = {
+                "width": round(dims.get("width_mm", 60)),
+                "height": round(dims.get("depth_mm", 40)),
+                "thickness": round(dims.get("thickness_mm", 6)),
+            }
+        return {
+            "geometry_family": family_hint,
+            "output_type": spec.get("output_type", "3d_solid"),
+            "parameters": params,
+        }
+    # Already legacy or empty
+    return spec
+
 from .repository import create_artifact as repo_create_artifact
 from .repository import get_job as repo_get_job, save_job
 from .repository import list_artifacts as repo_list_artifacts
@@ -84,7 +132,9 @@ def _artifact_to_record(row: dict) -> ArtifactRecord:
 
 def _job_with_artifacts(job: dict) -> JobRecord:
     artifacts = [_artifact_to_record(a) for a in repo_list_artifacts(str(job["id"]))]
-    return JobRecord(**job, artifacts=artifacts)
+    # Supabase may already include artifacts in the job dict from the SQL join
+    job_clean = {k: v for k, v in job.items() if k != "artifacts"}
+    return JobRecord(**job_clean, artifacts=artifacts)
 
 
 def _check_auth(header_value: str | None) -> None:
