@@ -380,112 +380,8 @@ def _append_run_log(entry: dict) -> None:
         fh.write(json.dumps(entry) + "\n")
 
 
-def run_build123d(code: str, prompt: str = "") -> tuple[str | None, str | None, str | None, str, str, str | None, float]:
-    if not code or not code.strip():
-        return None, None, None, "No code provided.", "No geometry was generated.", None, 0.0
-
-    logs: list[str] = []
-    glb_path: str | None = None
-    stl_path: str | None = None
-    step_path: str | None = None
-    started_at = time.time()
-    run_id = uuid.uuid4().hex[:8]
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        source_file = Path(tmpdir) / "user_script.py"
-        source_file.write_text(code)
-        stl_file = RUNS_DIR / f"{run_id}.stl"
-        step_file = RUNS_DIR / f"{run_id}.step"
-        glb_file = RUNS_DIR / f"{run_id}.glb"
-
-        logs.append(f"Run ID: {run_id}")
-        if prompt.strip():
-            logs.append(f"Prompt: {prompt.strip()}")
-        logs.append("Running build123d script...")
-
-        runner_code = f'''
-import sys
-from pathlib import Path
-from build123d import export_stl, export_step
-
-source_path = Path(r"{source_file}")
-user_globals = {{}}
-exec(compile(source_path.read_text(), str(source_path), "exec"), user_globals)
-
-candidate = user_globals.get("result")
-if candidate is None:
-    sys.exit("No `result` geometry found after execution.")
-
-def coerce_shape(obj):
-    if obj is None:
-        return None
-    if hasattr(obj, "wrapped"):
-        return obj
-    for attr in ("part", "shape", "solid", "obj"):
-        value = getattr(obj, attr, None)
-        if value is not None and not callable(value):
-            obj = value
-            if hasattr(obj, "wrapped"):
-                return obj
-    return obj
-
-shape = coerce_shape(candidate)
-if shape is None:
-    sys.exit("Could not extract exportable shape from `result`.")
-
-export_stl(shape, r"{stl_file}")
-export_step(shape, r"{step_file}")
-print("STL exported to {stl_file}")
-print("STEP exported to {step_file}")
-'''
-
-        runner_file = Path(tmpdir) / "_runner.py"
-        runner_file.write_text(runner_code)
-
-        try:
-            result = subprocess.run(
-                [BUILD123D_PYTHON, str(runner_file)],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            if result.stdout:
-                logs.append(result.stdout.strip())
-            if result.stderr:
-                logs.append(f"[stderr] {result.stderr.strip()}")
-            if result.returncode == 0 and stl_file.exists() and step_file.exists():
-                latest_stl = ARTIFACTS_DIR / "model.stl"
-                latest_step = ARTIFACTS_DIR / "model.step"
-                latest_glb = ARTIFACTS_DIR / "model.glb"
-                shutil.copy2(stl_file, latest_stl)
-                shutil.copy2(step_file, latest_step)
-                stl_path = str(latest_stl)
-                step_path = str(latest_step)
-
-                try:
-                    preview_mesh = trimesh.load_mesh(stl_file, force="mesh")
-                    preview_mesh.apply_transform(
-                        trimesh.transformations.rotation_matrix(-1.5707963267948966, [1, 0, 0])
-                    )
-                    preview_mesh.export(glb_file)
-                    shutil.copy2(glb_file, latest_glb)
-                    glb_path = str(latest_glb)
-                    logs.append(f"GLB preview exported to {latest_glb}")
-                except Exception as exc:  # noqa: BLE001
-                    logs.append(f"GLB preview export failed: {exc}")
-
-                logs.append(f"Export successful. Archived artifacts at runs/{run_id}.*")
-            else:
-                logs.append(f"Runner exited with code {result.returncode}.")
-        except subprocess.TimeoutExpired:
-            logs.append("Execution timed out after 60 seconds.")
-        except Exception as exc:  # noqa: BLE001
-            logs.append(f"Execution error: {exc}")
-            logs.append(traceback.format_exc())
-
-    duration = time.time() - started_at
-    summary = f"Model ready in {duration:.2f}s."
-    return glb_path, stl_path, step_path, "\n".join(logs), summary, run_id, duration
+def run_build123d_mock(code: str, prompt: str = "") -> tuple[str | None, str | None, str | None, str, str, str | None, float]:
+    return None, None, None, "Mock execution. Real execution moved to backend worker.", "Mock execution.", "mock_id", 0.0
 
 
 def generate_from_prompt(prompt: str, mode: str, output_type: str):
@@ -526,49 +422,60 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
             })
             return None, None, None, backend_log, "Backend created no CAD spec."
 
-    code = render_code_from_spec(spec)
-    glb_path, stl_path, step_path, logs, summary, run_id, execution_seconds = run_build123d(code, prompt)
-    combined_logs = "\n\n".join([
-        "Backend job created:" if backend_ok else "Backend unavailable, using local fallback:",
-        backend_log,
-        "Local execution log:",
-        logs,
-    ])
-    success = bool(step_path and (glb_path or stl_path))
-    _append_run_log({
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "run_id": run_id,
-        "prompt": prompt,
-        "mode": mode,
-        "output_type": output_type,
-        "geometry_family": spec.get("geometry_family"),
-        "backend_ok": backend_ok,
-        "suspicious_input": suspicious_input,
-        "fallback_level": fallback_level,
-        "success": success,
-        "runtime_seconds": round(time.time() - started_at, 3),
-        "execution_seconds": round(execution_seconds, 3),
-        "error": None if success else "Generation failed.",
-    })
-    if not step_path:
-        return None, None, None, combined_logs, "Generation failed. Try a simpler prompt or an example."
-
     job_id = str((job_data or {}).get("id", ""))
-    if backend_ok and job_id:
-        upload_logs: list[str] = []
-        _, stl_upload_log = upload_job_artifact(job_id, "stl", stl_path)
-        if stl_upload_log:
-            upload_logs.append("STL upload:\n" + stl_upload_log)
-        if step_path:
-            _, step_upload_log = upload_job_artifact(job_id, "step", step_path)
-            if step_upload_log:
-                upload_logs.append("STEP upload:\n" + step_upload_log)
-        if upload_logs:
-            combined_logs = "\n\n".join([combined_logs, "Artifact uploads:", *upload_logs])
+    
+    if not backend_ok or not job_id:
+        code = render_code_from_spec(spec)
+        # Using a minimal stub here for fallback so the app doesn't crash, 
+        # but the real execution is now on the backend.
+        glb_path, stl_path, step_path, logs, summary, run_id, execution_seconds = run_build123d_mock(code, prompt)
+        combined_logs = "\n\n".join([
+            "Backend unavailable, using local fallback:",
+            backend_log,
+            "Local execution log:",
+            logs,
+        ])
+        return None, None, None, combined_logs, "Local execution is disabled in this version. Please ensure the backend is available."
 
-    final_summary = summary if not client_notice else f"{summary}\n\n⚠️ {client_notice}"
-    preview_path = glb_path or stl_path
-    return preview_path, stl_path, step_path, combined_logs, final_summary
+    combined_logs = "Backend job created:\n" + backend_log + "\n\nPolling backend for completion..."
+    
+    # Poll for completion
+    max_polls = 60
+    poll_interval = 2.0
+    for i in range(max_polls):
+        req = request.Request(f"{BACKEND_URL.rstrip('/')}/v1/jobs/{job_id}", headers={"x-api-key": BACKEND_API_KEY} if BACKEND_API_KEY else {})
+        try:
+            with request.urlopen(req, timeout=BACKEND_TIMEOUT_SECONDS) as response:
+                current_job = json.loads(response.read().decode())
+                
+            status = current_job.get("status")
+            if status in ("completed", "failed"):
+                job_data = current_job
+                break
+                
+            time.sleep(poll_interval)
+        except Exception as exc:
+            combined_logs += f"\nPoll error: {exc}"
+            time.sleep(poll_interval)
+            
+    if job_data.get("status") != "completed":
+        combined_logs += f"\n\nJob ended with status: {job_data.get('status')}"
+        return None, None, None, combined_logs, "Backend generation failed or timed out."
+
+    # Process artifacts from the completed job
+    artifacts = job_data.get("artifacts", [])
+    glb_url = next((a.get("url") for a in artifacts if a.get("kind") == "glb"), None)
+    stl_url = next((a.get("url") for a in artifacts if a.get("kind") == "stl"), None)
+    step_url = next((a.get("url") for a in artifacts if a.get("kind") == "step"), None)
+    
+    combined_logs += "\n\nJob completed successfully."
+    if job_data.get("notes"):
+        combined_logs += "\n\nBackend Notes:\n" + "\n".join(job_data["notes"])
+        
+    final_summary = "Model ready." if not client_notice else f"Model ready.\n\n⚠️ {client_notice}"
+    
+    # We return the URLs for the Gradio components to download/display
+    return glb_url or stl_url, stl_url, step_url, combined_logs, final_summary
 
 
 def use_example(prompt: str, mode: str, output_type: str):
