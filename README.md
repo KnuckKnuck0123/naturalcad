@@ -1,7 +1,7 @@
 ---
 title: NaturalCAD
 emoji: 🍃
-colorFrom: slate
+colorFrom: gray
 colorTo: blue
 sdk: docker
 app_port: 7860
