@@ -5,12 +5,8 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -u 1000 user && \
-    chown -R user:user /opt/conda
-
-USER user
-ENV HOME=/home/user \
-    PATH=/home/user/.local/bin:$PATH \
+ENV HOME=/home/conda \
+    PATH=/home/conda/.local/bin:$PATH \
     CONDA_DIR=/opt/conda
 
 WORKDIR $HOME/app
