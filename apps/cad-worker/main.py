@@ -98,8 +98,6 @@ def _log_job_to_supabase(job_id: str, prompt: str, generated_code: str, status: 
         print(f"Error logging to Supabase DB: {e}")
 
 
-from fastapi import Request, HTTPException
-
 @app.function(
     image=image, 
     gpu="T4", 
@@ -111,12 +109,14 @@ from fastapi import Request, HTTPException
     ]
 )
 @modal.fastapi_endpoint(method="POST")
-def generate_cad_endpoint(payload: dict, request: Request):
+def generate_cad_endpoint(payload: dict, request: "fastapi.Request"):
     # API Key check
+    import os
     expected_key = os.environ.get("NATURALCAD_API_KEY")
     provided_key = request.headers.get("x-api-key")
     
     if expected_key and provided_key != expected_key:
+        from fastapi import HTTPException
         raise HTTPException(status_code=401, detail="Unauthorized")
         
     prompt = payload.get("prompt", "")
