@@ -1,0 +1,4 @@
+build123d==0.10.0
+trimesh
+huggingface_hub
+httpx
