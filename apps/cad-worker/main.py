@@ -160,16 +160,17 @@ Rules:
 7. `PolarLocations` and `GridLocations` ARE context managers. Use `with PolarLocations(radius, count):` or `with GridLocations(x_spacing, y_spacing, x_count, y_count):`. Do NOT wrap them in `Locations()`.
 8. NEVER use standalone `rotate()` or `translate()`. They do not exist in build123d. To move or rotate, use `with Locations((x, y, z)):` or `my_obj.rotate(Axis.Z, 45)`.
 9. `extrude()` takes `amount` (e.g. `extrude(amount=10)`), or `both=True`. Do NOT use `start=` or `distance=`.
+10. `extrude()` MUST be called immediately after a `with BuildSketch():` block. You cannot extrude without a sketch!
 
 Example:
 from build123d import *
-width = 60
-height = 40
-thickness = 6
 with BuildPart() as bp:
     with BuildSketch(Plane.XY) as base:
-        Rectangle(width, height)
-    extrude(amount=thickness)
+        Rectangle(60, 40)
+    extrude(amount=10)
+    with BuildSketch(bp.faces().sort_by(Axis.Z)[-1]):
+        Circle(10)
+    extrude(amount=20)
 result = bp.part
 """
 
