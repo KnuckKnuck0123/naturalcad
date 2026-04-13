@@ -465,6 +465,9 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
         payload = json.dumps({"prompt": prompt, "output_format": output_type}).encode()
         headers = {"Content-Type": "application/json"}
         
+        if BACKEND_API_KEY:
+            headers["x-api-key"] = BACKEND_API_KEY
+        
         req = request.Request(
             BACKEND_URL,
             data=payload,

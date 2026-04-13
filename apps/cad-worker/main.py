@@ -98,17 +98,27 @@ def _log_job_to_supabase(job_id: str, prompt: str, generated_code: str, status: 
         print(f"Error logging to Supabase DB: {e}")
 
 
+from fastapi import Request, HTTPException
+
 @app.function(
     image=image, 
     gpu="T4", 
     timeout=300,
     secrets=[
         modal.Secret.from_name("huggingface-secret"),
-        modal.Secret.from_name("supabase-secret")
+        modal.Secret.from_name("supabase-secret"),
+        modal.Secret.from_name("naturalcad-api-key") # We will add this secret
     ]
 )
 @modal.fastapi_endpoint(method="POST")
-def generate_cad_endpoint(payload: dict):
+def generate_cad_endpoint(payload: dict, request: Request):
+    # API Key check
+    expected_key = os.environ.get("NATURALCAD_API_KEY")
+    provided_key = request.headers.get("x-api-key")
+    
+    if expected_key and provided_key != expected_key:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+        
     prompt = payload.get("prompt", "")
     output_format = payload.get("output_format", "stl")
     return generate_cad.local(prompt, output_format)
@@ -148,6 +158,7 @@ Rules:
 3. ALWAYS store the final resulting Shape/Part in a variable named `result`.
 4. Use standard primitives like Box, Cylinder, Rectangle, Circle, etc.
 5. Make sure the code is simple, correct and uses the modern builder API (with BuildPart() as bp, etc.).
+6. Do NOT use the `points=` keyword argument in `Polygon()`. It takes a list of points directly as the first positional argument. E.g., `Polygon([ (0,0), (10,0), (5,10) ])`
 
 Example:
 from build123d import *
@@ -200,14 +211,29 @@ result = bp.part
         # Execute
         exec_globals = {}
         run_id = uuid.uuid4().hex[:8]
+        
+        # Security: Scrub environment variables before executing untrusted code
+        original_env = os.environ.copy()
+        os.environ.pop("HF_TOKEN", None)
+        os.environ.pop("SUPABASE_URL", None)
+        os.environ.pop("SUPABASE_SERVICE_ROLE_KEY", None)
+        os.environ.pop("NATURALCAD_API_KEY", None)
+        
         try:
             exec(compile(generated_code, str(script_path), "exec"), exec_globals)
         except Exception as e:
             import traceback
             err = f"Python execution failed: {e}\n{traceback.format_exc()}"
+            # Restore env to log the failure
+            os.environ.clear()
+            os.environ.update(original_env)
             _log_job_to_supabase(run_id, prompt, generated_code, "failed", err)
             return {"error": err, "code": generated_code}
             
+        # Restore env
+        os.environ.clear()
+        os.environ.update(original_env)
+        
         result_shape = exec_globals.get("result")
         
         if not result_shape:
