@@ -159,8 +159,7 @@ Rules:
 4. Use standard primitives like Box, Cylinder, Rectangle, Circle, etc.
 5. Make sure the code is simple, correct and uses the modern builder API (with BuildPart() as bp, etc.).
 6. Do NOT use the `points=` keyword argument in `Polygon()`. Use positional: `Polygon([ (0,0), (10,0) ])`.
-7. `PolarLocations` syntax is: `PolarLocations(radius, count)`. Do NOT use `PolarLocations(count, radius=...)`.
-8. `GridLocations` syntax is: `GridLocations(x_spacing, y_spacing, x_count, y_count)`.
+7. `PolarLocations` and `GridLocations` ARE context managers. Use `with PolarLocations(radius, count):` or `with GridLocations(x_spacing, y_spacing, x_count, y_count):`. Do NOT wrap them in `Locations()`.
 9. Do NOT use standalone `rotate()` or `translate()`. Use `with Locations(...)` or `my_obj.rotate(Axis.Z, 45)`.
 
 Example:
