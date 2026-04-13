@@ -263,50 +263,50 @@ result = bp.part
 
     # Export and upload all formats
     urls = {}
+    
+    # Make STL and STEP
+    export_stl(shape, str(Path(tmpdir) / "output.stl"))
+    export_step(shape, str(Path(tmpdir) / "output.step"))
+    
+    # Make GLB preview
+    from trimesh import load_mesh
+    import trimesh.transformations as tf
+    import math
+    
+    mesh = load_mesh(str(Path(tmpdir) / "output.stl"), force="mesh")
+    # Rotate -90 degrees around X axis so Z is up in the browser
+    mesh.apply_transform(tf.rotation_matrix(-math.pi/2, [1, 0, 0]))
+    mesh.export(str(Path(tmpdir) / "output.glb"))
+    
+    for fmt in ["stl", "step", "glb"]:
+        out_file = Path(tmpdir) / f"output.{fmt}"
         
-        # Make STL and STEP
-        export_stl(shape, str(Path(tmpdir) / "output.stl"))
-        export_step(shape, str(Path(tmpdir) / "output.step"))
-        
-        # Make GLB preview
-        from trimesh import load_mesh
-        import trimesh.transformations as tf
-        import math
-        
-        mesh = load_mesh(str(Path(tmpdir) / "output.stl"), force="mesh")
-        # Rotate -90 degrees around X axis so Z is up in the browser
-        mesh.apply_transform(tf.rotation_matrix(-math.pi/2, [1, 0, 0]))
-        mesh.export(str(Path(tmpdir) / "output.glb"))
-        
-        for fmt in ["stl", "step", "glb"]:
-            out_file = Path(tmpdir) / f"output.{fmt}"
+        if fmt == "stl":
+            content_type = "model/stl"
+        elif fmt == "step":
+            content_type = "application/octet-stream"
+        else:
+            content_type = "model/gltf-binary"
             
-            if fmt == "stl":
-                content_type = "model/stl"
-            elif fmt == "step":
-                content_type = "application/octet-stream"
-            else:
-                content_type = "model/gltf-binary"
-                
-            storage_key = f"runs/{run_id}/model.{fmt}"
-            
-            print(f"Uploading {fmt} artifact to Supabase...")
-            file_bytes = out_file.read_bytes()
-            
-            try:
-                public_url = _upload_to_supabase(storage_key, file_bytes, content_type)
-                urls[fmt] = public_url
-            except Exception as e:
-                _log_job_to_supabase(run_id, prompt, generated_code, "failed", f"Supabase upload failed for {fmt}: {e}")
-                return {"error": f"Supabase upload failed for {fmt}: {e}", "code": generated_code}
+        storage_key = f"runs/{run_id}/model.{fmt}"
         
-        _log_job_to_supabase(run_id, prompt, generated_code, "completed")
-        return {
-            "success": True,
-            "urls": urls,
-            "prompt": prompt,
-            "generated_code": generated_code
-        }
+        print(f"Uploading {fmt} artifact to Supabase...")
+        file_bytes = out_file.read_bytes()
+        
+        try:
+            public_url = _upload_to_supabase(storage_key, file_bytes, content_type)
+            urls[fmt] = public_url
+        except Exception as e:
+            _log_job_to_supabase(run_id, prompt, generated_code, "failed", f"Supabase upload failed for {fmt}: {e}")
+            return {"error": f"Supabase upload failed for {fmt}: {e}", "code": generated_code}
+    
+    _log_job_to_supabase(run_id, prompt, generated_code, "completed")
+    return {
+        "success": True,
+        "urls": urls,
+        "prompt": prompt,
+        "generated_code": generated_code
+    }
 
 
 @app.function(image=image)
