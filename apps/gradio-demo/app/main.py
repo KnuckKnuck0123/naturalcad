@@ -488,34 +488,48 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                 stl_url = urls.get("stl")
                 step_url = urls.get("step")
                 
-                # Download files to temp dir so Gradio can display them
-                # (HF Spaces blocks external URLs in Model3D)
-                tmpdir = tempfile.mkdtemp()
+                # Download files to artifacts directory (same as local mode)
+                # so Gradio can serve them properly
+                run_dir = Path("artifacts/runs")
+                run_dir.mkdir(parents=True, exist_ok=True)
+                run_id = uuid.uuid4().hex[:8]
                 
                 glb_file = None
                 stl_file = None
                 step_file = None
                 
                 if glb_url:
-                    glb_path = os.path.join(tmpdir, "model.glb")
+                    glb_path = run_dir / f"{run_id}.glb"
+                    print(f"DEBUG: Downloading GLB from {glb_url}")
                     with request.urlopen(glb_url) as r:
+                        data = r.read()
+                        print(f"DEBUG: Downloaded {len(data)} bytes")
                         with open(glb_path, "wb") as f:
-                            f.write(r.read())
-                    glb_file = glb_path
+                            f.write(data)
+                    glb_file = str(glb_path)
+                    print(f"DEBUG: GLB saved to {glb_file}")
                     
                 if stl_url:
-                    stl_path = os.path.join(tmpdir, "model.stl")
+                    stl_path = run_dir / f"{run_id}.stl"
+                    print(f"DEBUG: Downloading STL from {stl_url}")
                     with request.urlopen(stl_url) as r:
+                        data = r.read()
+                        print(f"DEBUG: Downloaded {len(data)} bytes")
                         with open(stl_path, "wb") as f:
-                            f.write(r.read())
-                    stl_file = stl_path
+                            f.write(data)
+                    stl_file = str(stl_path)
+                    print(f"DEBUG: STL saved to {stl_file}")
                     
                 if step_url:
-                    step_path = os.path.join(tmpdir, "model.step")
+                    step_path = run_dir / f"{run_id}.step"
+                    print(f"DEBUG: Downloading STEP from {step_url}")
                     with request.urlopen(step_url) as r:
+                        data = r.read()
+                        print(f"DEBUG: Downloaded {len(data)} bytes")
                         with open(step_path, "wb") as f:
-                            f.write(r.read())
-                    step_file = step_path
+                            f.write(data)
+                    step_file = str(step_path)
+                    print(f"DEBUG: STEP saved to {step_file}")
                 
                 combined_logs = f"Generated build123d code:\n\n{code}\n\n"
                 combined_logs += "Execution complete. Artifacts uploaded to Supabase."
