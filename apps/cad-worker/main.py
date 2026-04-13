@@ -10,7 +10,6 @@ import os
 import json
 import uuid
 import httpx
-from pydantic import BaseModel
 
 app = modal.App("naturalcad")
 
@@ -101,11 +100,6 @@ def _log_job_to_supabase(job_id: str, prompt: str, generated_code: str, status: 
 
 from pydantic import BaseModel
 
-class GenerateRequest(BaseModel):
-    prompt: str
-    output_format: str = "stl"
-
-
 @app.function(
     image=image, 
     gpu="T4", 
@@ -116,9 +110,10 @@ class GenerateRequest(BaseModel):
     ]
 )
 @modal.fastapi_endpoint(method="POST")
-def generate_cad_endpoint(req: GenerateRequest):
-    # Route via FastAPI endpoint explicitly
-    return generate_cad.local(req.prompt, req.output_format)
+def generate_cad_endpoint(payload: dict):
+    prompt = payload.get("prompt", "")
+    output_format = payload.get("output_format", "stl")
+    return generate_cad.local(prompt, output_format)
 
 
 @app.function(
