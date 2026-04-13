@@ -501,35 +501,53 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                 if glb_url:
                     glb_path = run_dir / f"{run_id}.glb"
                     print(f"DEBUG: Downloading GLB from {glb_url}")
-                    with request.urlopen(glb_url) as r:
-                        data = r.read()
-                        print(f"DEBUG: Downloaded {len(data)} bytes")
-                        with open(glb_path, "wb") as f:
-                            f.write(data)
-                    glb_file = str(glb_path)
-                    print(f"DEBUG: GLB saved to {glb_file}")
+                    try:
+                        with request.urlopen(glb_url) as r:
+                            data = r.read()
+                            print(f"DEBUG: Downloaded {len(data)} bytes")
+                            if len(data) < 100:
+                                print(f"DEBUG: WARNING - GLB file too small: {data}")
+                            with open(glb_path, "wb") as f:
+                                f.write(data)
+                        glb_file = str(glb_path)
+                        print(f"DEBUG: GLB saved to {glb_file}, size {os.path.getsize(glb_file)}")
+                    except Exception as e:
+                        print(f"DEBUG: GLB download failed: {e}")
+                        glb_file = None
                     
                 if stl_url:
                     stl_path = run_dir / f"{run_id}.stl"
                     print(f"DEBUG: Downloading STL from {stl_url}")
-                    with request.urlopen(stl_url) as r:
-                        data = r.read()
-                        print(f"DEBUG: Downloaded {len(data)} bytes")
-                        with open(stl_path, "wb") as f:
-                            f.write(data)
-                    stl_file = str(stl_path)
-                    print(f"DEBUG: STL saved to {stl_file}")
+                    try:
+                        with request.urlopen(stl_url) as r:
+                            data = r.read()
+                            print(f"DEBUG: Downloaded {len(data)} bytes")
+                            if len(data) < 100:
+                                print(f"DEBUG: WARNING - STL file too small: {data}")
+                            with open(stl_path, "wb") as f:
+                                f.write(data)
+                        stl_file = str(stl_path)
+                        print(f"DEBUG: STL saved to {stl_file}, size {os.path.getsize(stl_file)}")
+                    except Exception as e:
+                        print(f"DEBUG: STL download failed: {e}")
+                        stl_file = None
                     
                 if step_url:
                     step_path = run_dir / f"{run_id}.step"
                     print(f"DEBUG: Downloading STEP from {step_url}")
-                    with request.urlopen(step_url) as r:
-                        data = r.read()
-                        print(f"DEBUG: Downloaded {len(data)} bytes")
-                        with open(step_path, "wb") as f:
-                            f.write(data)
-                    step_file = str(step_path)
-                    print(f"DEBUG: STEP saved to {step_file}")
+                    try:
+                        with request.urlopen(step_url) as r:
+                            data = r.read()
+                            print(f"DEBUG: Downloaded {len(data)} bytes")
+                            if len(data) < 100:
+                                print(f"DEBUG: WARNING - STEP file too small: {data}")
+                            with open(step_path, "wb") as f:
+                                f.write(data)
+                        step_file = str(step_path)
+                        print(f"DEBUG: STEP saved to {step_file}, size {os.path.getsize(step_file)}")
+                    except Exception as e:
+                        print(f"DEBUG: STEP download failed: {e}")
+                        step_file = None
                 
                 combined_logs = f"Generated build123d code:\n\n{code}\n\n"
                 combined_logs += "Execution complete. Artifacts uploaded to Supabase."
