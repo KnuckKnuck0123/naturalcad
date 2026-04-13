@@ -278,7 +278,7 @@ result = p.part
             
             # Execute
             exec_globals = {}
-            run_id = uuid.uuid4().hex[:8]
+            run_id = str(uuid.uuid4())  # Full UUID for Supabase
             
             # Security: Scrub environment variables
             original_env = os.environ.copy()
@@ -323,54 +323,67 @@ result = p.part
 
     # Export and upload all formats
     urls = {}
+    stl_path = Path(tmpdir) / "output.stl"
+    step_path = Path(tmpdir) / "output.step"
+    glb_path = Path(tmpdir) / "output.glb"
     
-    # Make STL and STEP
+    # Make STL 
     try:
-        export_stl(shape, str(Path(tmpdir) / "output.stl"))
+        export_stl(shape, str(stl_path))
+        if not stl_path.exists():
+            print("STL export created no file")
     except Exception as e:
         print(f"Failed to export STL: {e}")
+        stl_path = None
         
+    # Make STEP
     try:
-        export_step(shape, str(Path(tmpdir) / "output.step"))
+        export_step(shape, str(step_path))
+        if not step_path.exists():
+            print("STEP export created no file")
+            step_path = None
     except Exception as e:
         print(f"Failed to export STEP: {e}")
+        step_path = None
     
     # Make GLB preview
     try:
-        from trimesh import load_mesh
-        import trimesh.transformations as tf
-        import math
-        
-        mesh = load_mesh(str(Path(tmpdir) / "output.stl"), force="mesh")
-        # Rotate -90 degrees around X axis so Z is up in the browser
-        mesh.apply_transform(tf.rotation_matrix(-math.pi/2, [1, 0, 0]))
-        mesh.export(str(Path(tmpdir) / "output.glb"))
+        if stl_path and stl_path.exists():
+            from trimesh import load_mesh
+            import trimesh.transformations as tf
+            import math
+            
+            mesh = load_mesh(str(stl_path), force="mesh")
+            # Rotate -90 degrees around X axis so Z is up in the browser
+            mesh.apply_transform(tf.rotation_matrix(-math.pi/2, [1, 0, 0]))
+            mesh.export(str(glb_path))
+        else:
+            print("Cannot create GLB - no STL file")
     except Exception as e:
         print(f"Failed to export GLB: {e}")
     
-    for fmt in ["stl", "step", "glb"]:
-        out_file = Path(tmpdir) / f"output.{fmt}"
-        if not out_file.exists():
+    # Upload existing files
+    file_pairs = [
+        ("stl", stl_path, "model/stl"),
+        ("step", step_path, "application/octet-stream"),
+        ("glb", glb_path, "model/gltf-binary"),
+    ]
+    
+    for fmt, file_path, content_type in file_pairs:
+        if not file_path or not file_path.exists():
             continue
             
-        if fmt == "stl":
-            content_type = "model/stl"
-        elif fmt == "step":
-            content_type = "application/octet-stream"
-        else:
-            content_type = "model/gltf-binary"
-            
-        storage_key = f"runs/{run_id}/model.{fmt}"
+        storage_key = f"runs/{run_id[:8]}/model.{fmt}"  # Short ID for file path
         
         print(f"Uploading {fmt} artifact to Supabase...")
-        file_bytes = out_file.read_bytes()
+        file_bytes = file_path.read_bytes()
+        print(f"DEBUG: {fmt} file size: {len(file_bytes)} bytes")
         
         try:
             public_url = _upload_to_supabase(storage_key, file_bytes, content_type)
             urls[fmt] = public_url
         except Exception as e:
-            _log_job_to_supabase(run_id, prompt, generated_code, "failed", f"Supabase upload failed for {fmt}: {e}")
-            return {"error": f"Supabase upload failed for {fmt}: {e}", "code": generated_code}
+            print(f"Upload error for {fmt}: {e}")
     
     _log_job_to_supabase(run_id, prompt, generated_code, "completed")
     return {
