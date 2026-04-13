@@ -178,81 +178,91 @@ with BuildPart() as bp:
 result = bp.part
 """
 
-    print(f"Calling LLM for prompt: {prompt}")
-    try:
-        response = client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=1024,
-            temperature=0.2,
-        )
-        generated_code = response.choices[0].message.content.strip()
-        
-        # Clean up markdown
-        if generated_code.startswith("```python"):
-            generated_code = generated_code[9:]
-        elif generated_code.startswith("```"):
-            generated_code = generated_code[3:]
-        if generated_code.endswith("```"):
-            generated_code = generated_code[:-3]
-            
-        generated_code = generated_code.strip()
-    except Exception as e:
-        return {"error": f"LLM code generation failed: {e}"}
-
-    print(f"Generated Code:\n{generated_code}")
-
-
-    # Run build123d
-    from build123d import export_stl, export_step
+    # Retry loop
+    max_attempts = 3
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": prompt}
+    ]
     
-    with tempfile.TemporaryDirectory() as tmpdir:
-        script_path = Path(tmpdir) / "script.py"
-        script_path.write_text(generated_code)
-        
-        output_file = Path(tmpdir) / f"output.{output_format}"
-        
-        # Execute
-        exec_globals = {}
-        run_id = uuid.uuid4().hex[:8]
-        
-        # Security: Scrub environment variables before executing untrusted code
-        original_env = os.environ.copy()
-        os.environ.pop("HF_TOKEN", None)
-        os.environ.pop("SUPABASE_URL", None)
-        os.environ.pop("SUPABASE_SERVICE_ROLE_KEY", None)
-        os.environ.pop("NATURALCAD_API_KEY", None)
-        
+    for attempt in range(max_attempts):
+        print(f"Calling LLM for prompt (Attempt {attempt+1}): {prompt}")
         try:
-            exec(compile(generated_code, str(script_path), "exec"), exec_globals)
+            response = client.chat.completions.create(
+                messages=messages,
+                max_tokens=1024,
+                temperature=0.2,
+            )
+            generated_code = response.choices[0].message.content.strip()
+            
+            # Clean up markdown
+            if generated_code.startswith("```python"):
+                generated_code = generated_code[9:]
+            elif generated_code.startswith("```"):
+                generated_code = generated_code[3:]
+            if generated_code.endswith("```"):
+                generated_code = generated_code[:-3]
+                
+            generated_code = generated_code.strip()
         except Exception as e:
-            import traceback
-            err = f"Python execution failed: {e}\n{traceback.format_exc()}"
-            # Restore env to log the failure
+            return {"error": f"LLM code generation failed: {e}"}
+
+        print(f"Generated Code:\n{generated_code}")
+
+        # Run build123d
+        from build123d import export_stl, export_step
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            script_path = Path(tmpdir) / "script.py"
+            script_path.write_text(generated_code)
+            
+            # Execute
+            exec_globals = {}
+            run_id = uuid.uuid4().hex[:8]
+            
+            # Security: Scrub environment variables
+            original_env = os.environ.copy()
+            os.environ.pop("HF_TOKEN", None)
+            os.environ.pop("SUPABASE_URL", None)
+            os.environ.pop("SUPABASE_SERVICE_ROLE_KEY", None)
+            os.environ.pop("NATURALCAD_API_KEY", None)
+            
+            exec_success = False
+            err = ""
+            try:
+                exec(compile(generated_code, str(script_path), "exec"), exec_globals)
+                exec_success = True
+            except Exception as e:
+                import traceback
+                err = f"{type(e).__name__}: {e}"
+                print(f"Execution failed: {err}")
+                
+            # Restore env
             os.environ.clear()
             os.environ.update(original_env)
-            _log_job_to_supabase(run_id, prompt, generated_code, "failed", err)
-            return {"error": err, "code": generated_code}
             
-        # Restore env
-        os.environ.clear()
-        os.environ.update(original_env)
-        
-        result_shape = exec_globals.get("result")
-        
-        if not result_shape:
-            _log_job_to_supabase(run_id, prompt, generated_code, "failed", "No geometry generated")
-            return {"error": "No geometry generated"}
-        
-        # Get shape
-        shape = result_shape
-        # In newer build123d, parts don't need wrapping extracted for export
-        # We just pass the Part or Shape object directly
-        
-        # Export and upload all formats
-        urls = {}
+            if exec_success:
+                result_shape = exec_globals.get("result")
+                if not result_shape:
+                    err = "No 'result' variable found."
+                    exec_success = False
+            
+            if not exec_success:
+                if attempt < max_attempts - 1:
+                    print("Retrying with error message...")
+                    messages.append({"role": "assistant", "content": generated_code})
+                    messages.append({"role": "user", "content": f"That code failed with error:\n{err}\nFix the code and return only the fixed Python script."})
+                    continue
+                else:
+                    _log_job_to_supabase(run_id, prompt, generated_code, "failed", err)
+                    return {"error": err, "code": generated_code}
+            
+            # Success! Break out of loop and save files
+            shape = result_shape
+            break
+
+    # Export and upload all formats
+    urls = {}
         
         # Make STL and STEP
         export_stl(shape, str(Path(tmpdir) / "output.stl"))
