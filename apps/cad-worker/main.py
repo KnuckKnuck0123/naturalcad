@@ -163,7 +163,7 @@ Rules:
 5. Make sure the code is simple, correct and uses the modern builder API (with BuildPart() as bp, etc.).
 6. Do NOT use the `points=` keyword argument in `Polygon()`. Use positional: `Polygon([ (0,0), (10,0) ])`.
 7. `PolarLocations` and `GridLocations` ARE context managers. Use `with PolarLocations(radius, count):` or `with GridLocations(x_spacing, y_spacing, x_count, y_count):`. Do NOT wrap them in `Locations()`.
-8. Do NOT use standalone `rotate()` or `translate()`. Use `with Locations(...)` or `my_obj.rotate(Axis.Z, 45)`.
+8. NEVER use standalone `rotate()` or `translate()`. They do not exist in build123d. To move or rotate, use `with Locations((x, y, z)):` or `my_obj.rotate(Axis.Z, 45)`.
 9. `extrude()` takes `amount` (e.g. `extrude(amount=10)`), or `both=True`. Do NOT use `start=` or `distance=`.
 
 Example:
