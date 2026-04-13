@@ -98,8 +98,6 @@ def _log_job_to_supabase(job_id: str, prompt: str, generated_code: str, status: 
         print(f"Error logging to Supabase DB: {e}")
 
 
-from pydantic import BaseModel
-
 @app.function(
     image=image, 
     gpu="T4", 
