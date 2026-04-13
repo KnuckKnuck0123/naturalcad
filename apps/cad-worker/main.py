@@ -143,7 +143,7 @@ def generate_cad(prompt: str, output_format: str = "stl"):
         return {"error": "HF_TOKEN not found in environment secrets"}
         
     client = InferenceClient(
-        model="Qwen/Qwen2.5-Coder-32B-Instruct", 
+        model="deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct", 
         token=hf_token
     )
     
@@ -161,6 +161,8 @@ Rules:
 8. NEVER use standalone `rotate()` or `translate()`. They do not exist in build123d. To move or rotate, use `with Locations((x, y, z)):` or `my_obj.rotate(Axis.Z, 45)`.
 9. `extrude()` takes `amount` (e.g. `extrude(amount=10)`), or `both=True`. Do NOT use `start=` or `distance=`.
 10. `extrude()` MUST be called immediately after a `with BuildSketch():` block. You cannot extrude without a sketch!
+
+Refer to the 'build123d KNOWLEDGE BASE' below for accurate syntax and common operations. Adapt and combine these patterns to generate the requested 3D model.
 
 Example:
 from build123d import *
