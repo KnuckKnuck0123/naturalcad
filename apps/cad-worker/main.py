@@ -236,6 +236,50 @@ with BuildPart() as p:
     RectangleRounded(60, 40, 5)
     extrude(amount=10)
 result = p.part
+
+# PATTERN 10: Pyramid (using Cone)
+with BuildPart() as p:
+    Cone(radius=50, height=100)
+result = p.part
+
+# PATTERN 11: Lofting two sketches
+with BuildPart() as p:
+    with BuildSketch(Plane.XY.offset(0)) as s1:
+        Circle(30)
+    with BuildSketch(Plane.XY.offset(50)) as s2:
+        Rectangle(20, 20)
+    loft(s1.sketch, s2.sketch)
+result = p.part
+
+# PATTERN 12: Mirroring a part
+with BuildPart() as p:
+    Box(30, 20, 10)
+    mirror(p.part, Plane.YZ)
+result = p.part
+
+# PATTERN 13: Union of two shapes
+with BuildPart() as p:
+    Box(30, 30, 30)
+    with Locations((20, 0, 0)):
+        Sphere(15)
+    add()
+result = p.part
+
+# PATTERN 14: Difference (Subtract) of two shapes
+with BuildPart() as p:
+    Box(30, 30, 30)
+    with Locations((10, 0, 0)):
+        Cylinder(radius=5, height=40)
+    subtract()
+result = p.part
+
+# PATTERN 15: Intersection of two shapes
+with BuildPart() as p:
+    Box(30, 30, 30)
+    with Locations((15, 0, 0)):
+        Sphere(20)
+    intersect()
+result = p.part
 """
 
     # Retry loop
