@@ -158,8 +158,10 @@ Rules:
 3. ALWAYS store the final resulting Shape/Part in a variable named `result`.
 4. Use standard primitives like Box, Cylinder, Rectangle, Circle, etc.
 5. Make sure the code is simple, correct and uses the modern builder API (with BuildPart() as bp, etc.).
-6. Do NOT use the `points=` keyword argument in `Polygon()`. It takes a list of points directly as the first positional argument. E.g., `Polygon([ (0,0), (10,0), (5,10) ])`
-7. Do NOT use standalone `rotate()` or `translate()` functions. To place or rotate objects, use Context Managers like `with Locations(...)`, `with PolarLocations(...)`, or `with GridLocations(...)`. Or use methods on the object itself like `my_obj.rotate(Axis.Z, 45)`.
+6. Do NOT use the `points=` keyword argument in `Polygon()`. Use positional: `Polygon([ (0,0), (10,0) ])`.
+7. `PolarLocations` syntax is: `PolarLocations(radius, count)`. Do NOT use `PolarLocations(count, radius=...)`.
+8. `GridLocations` syntax is: `GridLocations(x_spacing, y_spacing, x_count, y_count)`.
+9. Do NOT use standalone `rotate()` or `translate()`. Use `with Locations(...)` or `my_obj.rotate(Axis.Z, 45)`.
 
 Example:
 from build123d import *
