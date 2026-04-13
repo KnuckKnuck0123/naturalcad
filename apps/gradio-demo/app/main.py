@@ -23,7 +23,7 @@ import trimesh
 BUILD123D_PYTHON = os.getenv("BUILD123D_PYTHON", sys.executable)
 BACKEND_URL = os.getenv("NATURALCAD_BACKEND_URL", os.getenv("NL_CAD_BACKEND_URL", "")).strip()
 BACKEND_API_KEY = os.getenv("NATURALCAD_API_KEY", os.getenv("NL_CAD_API_KEY", ""))
-BACKEND_TIMEOUT_SECONDS = float(os.getenv("NATURALCAD_BACKEND_TIMEOUT", "4"))
+BACKEND_TIMEOUT_SECONDS = float(os.getenv("NATURALCAD_BACKEND_TIMEOUT", "60"))
 ARTIFACTS_DIR = Path(__file__).parent.parent / "artifacts"
 RUNS_DIR = ARTIFACTS_DIR / "runs"
 LOGS_DIR = ARTIFACTS_DIR / "logs"
@@ -459,15 +459,14 @@ mesh.export(str(glb_file))
 def generate_from_prompt(prompt: str, mode: str, output_type: str):
     started_at = time.time()
     
-    # Call the new /v1/generate endpoint on Fly
     if BACKEND_URL:
-        payload = json.dumps({"prompt": prompt, "mode": mode, "output_type": output_type}).encode()
+        # We are now hitting a Modal Web Endpoint
+        # It expects a JSON payload matching the function arguments
+        payload = json.dumps({"prompt": prompt, "output_format": output_type}).encode()
         headers = {"Content-Type": "application/json"}
-        if BACKEND_API_KEY:
-            headers["x-api-key"] = BACKEND_API_KEY
         
         req = request.Request(
-            f"{BACKEND_URL.rstrip('/')}/v1/generate",
+            BACKEND_URL,
             data=payload,
             headers=headers,
             method="POST",
@@ -475,15 +474,29 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
         try:
             with request.urlopen(req, timeout=BACKEND_TIMEOUT_SECONDS) as response:
                 result = json.loads(response.read().decode())
-                code = result.get("code", "")
-                if code:
-                    combined_logs = f"Generated build123d code:\n\n{code}"
-                    final_summary = "Code ready. Copy and run locally with build123d."
-                    return code, code, code, combined_logs, final_summary
+                
+                if "error" in result:
+                    return None, None, None, f"Error from backend:\n{result['error']}", "Backend generation failed."
+                    
+                urls = result.get("urls", {})
+                code = result.get("generated_code", "")
+                
+                glb_url = urls.get("glb")
+                stl_url = urls.get("stl")
+                step_url = urls.get("step")
+                
+                combined_logs = f"Generated build123d code:\n\n{code}\n\n"
+                combined_logs += "Execution complete. Artifacts uploaded to Supabase."
+                final_summary = "Model ready!"
+                
+                return glb_url, stl_url, step_url, combined_logs, final_summary
+        except error.HTTPError as exc:
+            detail = exc.read().decode() if exc.fp else str(exc)
+            return None, None, None, f"Backend HTTP {exc.code}: {detail}", "Generation failed."
         except Exception as exc:
-            pass
+            return None, None, None, f"Backend error: {exc}", "Generation failed."
     
-    # Fallback to local spec generation
+    # Fallback to local code stub if backend is missing
     spec = {
         "output_type": output_type,
         "geometry_family": "bracket_plate",
@@ -492,7 +505,7 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
     code = render_code_from_spec(spec)
     combined_logs = f"Local fallback:\n{code}"
     final_summary = "Code generated."
-    return code, code, code, combined_logs, final_summary
+    return None, None, None, combined_logs, final_summary
 
 
 def use_example(prompt: str, mode: str, output_type: str):
