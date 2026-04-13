@@ -488,11 +488,40 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                 stl_url = urls.get("stl")
                 step_url = urls.get("step")
                 
+                # Download files to temp dir so Gradio can display them
+                # (HF Spaces blocks external URLs in Model3D)
+                tmpdir = tempfile.mkdtemp()
+                
+                glb_file = None
+                stl_file = None
+                step_file = None
+                
+                if glb_url:
+                    glb_path = os.path.join(tmpdir, "model.glb")
+                    with request.urlopen(glb_url) as r:
+                        with open(glb_path, "wb") as f:
+                            f.write(r.read())
+                    glb_file = glb_path
+                    
+                if stl_url:
+                    stl_path = os.path.join(tmpdir, "model.stl")
+                    with request.urlopen(stl_url) as r:
+                        with open(stl_path, "wb") as f:
+                            f.write(r.read())
+                    stl_file = stl_path
+                    
+                if step_url:
+                    step_path = os.path.join(tmpdir, "model.step")
+                    with request.urlopen(step_url) as r:
+                        with open(step_path, "wb") as f:
+                            f.write(r.read())
+                    step_file = step_path
+                
                 combined_logs = f"Generated build123d code:\n\n{code}\n\n"
                 combined_logs += "Execution complete. Artifacts uploaded to Supabase."
                 final_summary = "Model ready!"
                 
-                return glb_url, stl_url, step_url, combined_logs, final_summary
+                return glb_file, stl_file, step_file, combined_logs, final_summary
         except error.HTTPError as exc:
             detail = exc.read().decode() if exc.fp else str(exc)
             return None, None, None, f"Backend HTTP {exc.code}: {detail}", "Generation failed."
