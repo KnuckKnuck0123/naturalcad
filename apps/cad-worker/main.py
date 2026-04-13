@@ -143,7 +143,7 @@ def generate_cad(prompt: str, output_format: str = "stl"):
         return {"error": "HF_TOKEN not found in environment secrets"}
         
     client = InferenceClient(
-        model="deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct", 
+        model="Qwen/Qwen2.5-Coder-32B-Instruct", 
         token=hf_token
     )
     
