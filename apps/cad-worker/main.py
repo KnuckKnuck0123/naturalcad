@@ -84,9 +84,12 @@ def _log_job_to_supabase(job_id: str, prompt: str, generated_code: str, status: 
         "status": status,
         "mode": "part",
         "output_type": "3d_solid",
-        "spec": {"generated_code": generated_code},
-        "error": error
+        "spec": {"generated_code": generated_code}
     }
+    
+    # Put error in spec JSON so it doesn't crash on missing column
+    if error:
+        payload["spec"]["error"] = error
     
     try:
         with httpx.Client() as client:
