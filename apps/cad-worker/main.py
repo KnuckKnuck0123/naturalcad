@@ -6,6 +6,11 @@ Takes user prompt, generates build123d code, runs it, returns STL.
 import modal
 from pathlib import Path
 import tempfile
+import os
+import json
+import uuid
+import httpx
+from pydantic import BaseModel
 
 app = modal.App("naturalcad")
 
@@ -19,7 +24,7 @@ image = (
         "libxext6",
         "libxkbcommon0"
     )
-    .pip_install("build123d==0.10.0", "trimesh", "huggingface_hub", "httpx")
+    .pip_install("build123d==0.10.0", "trimesh", "huggingface_hub", "httpx", "fastapi", "pydantic")
 )
 
 
@@ -52,6 +57,55 @@ def _upload_to_supabase(storage_key: str, file_data: bytes, content_type: str = 
     return f"{url}/storage/v1/object/public/{bucket}/{encoded_key}"
 
 
+def _log_job_to_supabase(job_id: str, prompt: str, generated_code: str, status: str, error: str = None) -> None:
+    """Log the job and its code/status to the Supabase database via REST API."""
+    import httpx
+    import json
+    import os
+    
+    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    
+    if not url or not key:
+        print("Skipping DB logging: No Supabase URL/Key")
+        return
+        
+    endpoint = f"{url}/rest/v1/jobs"
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates"
+    }
+    
+    payload = {
+        "id": job_id,
+        "prompt": prompt,
+        "status": status,
+        "mode": "part",
+        "output_type": "3d_solid",
+        "spec": {"generated_code": generated_code},
+        "error": error
+    }
+    
+    try:
+        with httpx.Client() as client:
+            resp = client.post(endpoint, json=payload, headers=headers)
+            if resp.status_code >= 400:
+                print(f"Failed to log job {job_id} to DB: {resp.text}")
+            else:
+                print(f"Successfully logged job {job_id} to DB.")
+    except Exception as e:
+        print(f"Error logging to Supabase DB: {e}")
+
+
+from pydantic import BaseModel
+
+class GenerateRequest(BaseModel):
+    prompt: str
+    output_format: str = "stl"
+
+
 @app.function(
     image=image, 
     gpu="T4", 
@@ -61,9 +115,10 @@ def _upload_to_supabase(storage_key: str, file_data: bytes, content_type: str = 
         modal.Secret.from_name("supabase-secret")
     ]
 )
-@modal.web_endpoint(method="POST")
-def generate_cad_endpoint(prompt: str, output_format: str = "stl"):
-    return generate_cad.local(prompt, output_format)
+@modal.fastapi_endpoint(method="POST")
+def generate_cad_endpoint(req: GenerateRequest):
+    # Route via FastAPI endpoint explicitly
+    return generate_cad.local(req.prompt, req.output_format)
 
 
 @app.function(
@@ -151,10 +206,19 @@ result = bp.part
         
         # Execute
         exec_globals = {}
-        exec(compile(generated_code, str(script_path), "exec"), exec_globals)
+        run_id = uuid.uuid4().hex[:8]
+        try:
+            exec(compile(generated_code, str(script_path), "exec"), exec_globals)
+        except Exception as e:
+            import traceback
+            err = f"Python execution failed: {e}\n{traceback.format_exc()}"
+            _log_job_to_supabase(run_id, prompt, generated_code, "failed", err)
+            return {"error": err, "code": generated_code}
+            
         result_shape = exec_globals.get("result")
         
         if not result_shape:
+            _log_job_to_supabase(run_id, prompt, generated_code, "failed", "No geometry generated")
             return {"error": "No geometry generated"}
         
         # Get shape
@@ -164,7 +228,6 @@ result = bp.part
         
         # Export and upload all formats
         urls = {}
-        run_id = uuid.uuid4().hex[:8]
         
         # Make STL and STEP
         export_stl(shape, str(Path(tmpdir) / "output.stl"))
@@ -199,8 +262,10 @@ result = bp.part
                 public_url = _upload_to_supabase(storage_key, file_bytes, content_type)
                 urls[fmt] = public_url
             except Exception as e:
+                _log_job_to_supabase(run_id, prompt, generated_code, "failed", f"Supabase upload failed for {fmt}: {e}")
                 return {"error": f"Supabase upload failed for {fmt}: {e}", "code": generated_code}
         
+        _log_job_to_supabase(run_id, prompt, generated_code, "completed")
         return {
             "success": True,
             "urls": urls,
