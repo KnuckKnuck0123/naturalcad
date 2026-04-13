@@ -172,6 +172,70 @@ with BuildPart() as bp:
         Circle(10)
     extrude(amount=20)
 result = bp.part
+
+# build123d KNOWLEDGE BASE - Copy these patterns exactly:
+
+# PATTERN 1: Simple Box
+with BuildPart() as p:
+    Box(80, 60, 10)
+result = p.part
+
+# PATTERN 2: Box with Hole
+with BuildPart() as p:
+    Box(80, 60, 10)
+    Cylinder(radius=11, height=10, mode=Mode.SUBTRACT)
+result = p.part
+
+# PATTERN 3: Extruded Sketch with Hole
+with BuildPart() as p:
+    with BuildSketch():
+        Circle(60)
+        Rectangle(20, 20, mode=Mode.SUBTRACT)
+    extrude(amount=10)
+result = p.part
+
+# PATTERN 4: Multiple Holes using Locations
+with BuildPart() as p:
+    with BuildSketch():
+        Circle(80)
+    extrude(amount=10)
+    with BuildSketch(p.faces().sort_by(Axis.Z)[-1]):
+        with Locations((20, 0), (-20, 0), (0, 20), (0, -20)):
+            Cylinder(radius=5, height=10, mode=Mode.SUBTRACT)
+result = p.part
+
+# PATTERN 5: PolarLocations for holes in a circle
+with BuildPart() as p:
+    with BuildSketch():
+        Circle(50)
+    extrude(amount=10)
+    with BuildSketch(p.faces().sort_by(Axis.Z)[-1]):
+        with PolarLocations(20, 6):
+            Cylinder(radius=3, height=10, mode=Mode.SUBTRACT)
+result = p.part
+
+# PATTERN 6: Fillet edges
+with BuildPart() as p:
+    Box(60, 40, 10)
+    fillet(p.edges(), radius=2)
+result = p.part
+
+# PATTERN 7: Chamfer
+with BuildPart() as p:
+    Box(60, 40, 10)
+    chamfer(p.edges(), radius=1)
+result = p.part
+
+# PATTERN 8: Cylinder
+with BuildPart() as p:
+    Cylinder(radius=20, height=50)
+result = p.part
+
+# PATTERN 9: Rounded Rectangle
+with BuildPart() as p:
+    RectangleRounded(60, 40, 5)
+    extrude(amount=10)
+result = p.part
 """
 
     # Retry loop
