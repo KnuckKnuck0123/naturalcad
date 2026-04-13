@@ -10,6 +10,7 @@ import os
 import json
 import uuid
 import httpx
+from fastapi import Request, HTTPException
 
 app = modal.App("naturalcad")
 
@@ -109,14 +110,13 @@ def _log_job_to_supabase(job_id: str, prompt: str, generated_code: str, status: 
     ]
 )
 @modal.fastapi_endpoint(method="POST")
-def generate_cad_endpoint(payload: dict, request: "fastapi.Request"):
+def generate_cad_endpoint(payload: dict, request: Request):
     # API Key check
     import os
     expected_key = os.environ.get("NATURALCAD_API_KEY")
     provided_key = request.headers.get("x-api-key")
     
     if expected_key and provided_key != expected_key:
-        from fastapi import HTTPException
         raise HTTPException(status_code=401, detail="Unauthorized")
         
     prompt = payload.get("prompt", "")
