@@ -83,13 +83,8 @@ def _log_job_to_supabase(job_id: str, prompt: str, generated_code: str, status: 
         "prompt": prompt,
         "status": status,
         "mode": "part",
-        "output_type": "3d_solid",
-        "spec": {"generated_code": generated_code}
+        "output_type": "3d_solid"
     }
-    
-    # Put error in spec JSON so it doesn't crash on missing column
-    if error:
-        payload["spec"]["error"] = error
     
     try:
         with httpx.Client() as client:
@@ -265,22 +260,34 @@ result = bp.part
     urls = {}
     
     # Make STL and STEP
-    export_stl(shape, str(Path(tmpdir) / "output.stl"))
-    export_step(shape, str(Path(tmpdir) / "output.step"))
+    try:
+        export_stl(shape, str(Path(tmpdir) / "output.stl"))
+    except Exception as e:
+        print(f"Failed to export STL: {e}")
+        
+    try:
+        export_step(shape, str(Path(tmpdir) / "output.step"))
+    except Exception as e:
+        print(f"Failed to export STEP: {e}")
     
     # Make GLB preview
-    from trimesh import load_mesh
-    import trimesh.transformations as tf
-    import math
-    
-    mesh = load_mesh(str(Path(tmpdir) / "output.stl"), force="mesh")
-    # Rotate -90 degrees around X axis so Z is up in the browser
-    mesh.apply_transform(tf.rotation_matrix(-math.pi/2, [1, 0, 0]))
-    mesh.export(str(Path(tmpdir) / "output.glb"))
+    try:
+        from trimesh import load_mesh
+        import trimesh.transformations as tf
+        import math
+        
+        mesh = load_mesh(str(Path(tmpdir) / "output.stl"), force="mesh")
+        # Rotate -90 degrees around X axis so Z is up in the browser
+        mesh.apply_transform(tf.rotation_matrix(-math.pi/2, [1, 0, 0]))
+        mesh.export(str(Path(tmpdir) / "output.glb"))
+    except Exception as e:
+        print(f"Failed to export GLB: {e}")
     
     for fmt in ["stl", "step", "glb"]:
         out_file = Path(tmpdir) / f"output.{fmt}"
-        
+        if not out_file.exists():
+            continue
+            
         if fmt == "stl":
             content_type = "model/stl"
         elif fmt == "step":
