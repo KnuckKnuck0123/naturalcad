@@ -460,14 +460,16 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
     started_at = time.time()
     
     if BACKEND_URL:
-        # We are now hitting a Modal Web Endpoint
-        # It expects a JSON payload matching the function arguments
-        payload = json.dumps({"prompt": prompt, "output_format": output_type}).encode()
+        payload = json.dumps({
+            "prompt": prompt,
+            "mode": mode,
+            "output_type": output_type,
+        }).encode()
         headers = {"Content-Type": "application/json"}
-        
+
         if BACKEND_API_KEY:
             headers["x-api-key"] = BACKEND_API_KEY
-        
+
         req = request.Request(
             BACKEND_URL,
             data=payload,
@@ -477,12 +479,13 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
         try:
             with request.urlopen(req, timeout=BACKEND_TIMEOUT_SECONDS) as response:
                 result = json.loads(response.read().decode())
-                
+
                 if "error" in result:
                     return None, None, None, f"Error from backend:\n{result['error']}", "Backend generation failed."
-                    
+
                 urls = result.get("urls", {})
                 code = result.get("generated_code", "")
+                job_id = result.get("job_id", "")
                 
                 glb_url = urls.get("glb")
                 stl_url = urls.get("stl")
@@ -551,11 +554,17 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                 
                 combined_logs = f"Generated build123d code:\n\n{code}\n\n"
                 combined_logs += "Execution complete. Artifacts uploaded to Supabase."
-                final_summary = "Model ready!"
-                
+                if job_id:
+                    combined_logs += f"\nJob ID: {job_id}"
+                final_summary = f"Model ready!{' · ' + job_id[:8] if job_id else ''}"
+
                 return glb_file, stl_file, step_file, combined_logs, final_summary
         except error.HTTPError as exc:
-            detail = exc.read().decode() if exc.fp else str(exc)
+            body = exc.read().decode() if exc.fp else ""
+            try:
+                detail = json.loads(body).get("error", body) if body else str(exc)
+            except Exception:
+                detail = body or str(exc)
             return None, None, None, f"Backend HTTP {exc.code}: {detail}", "Generation failed."
         except Exception as exc:
             return None, None, None, f"Backend error: {exc}", "Generation failed."
