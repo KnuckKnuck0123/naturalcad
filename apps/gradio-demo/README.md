@@ -16,6 +16,7 @@ Gradio prototype for NaturalCAD, a public natural-language CAD modeler built on 
 - Run build123d geometry and see a GLB preview in the browser
 - Download STL and STEP exports
 - Upload generated STL/STEP artifacts to backend storage when backend is configured
+- If backend omits GLB storage, the UI can generate a local GLB preview from STL for viewing
 - View backend + execution logs
 - Lightweight run logging for MVP testing data (`artifacts/logs/runs.jsonl`)
 
