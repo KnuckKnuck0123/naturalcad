@@ -61,7 +61,7 @@ image = (
 # ---------------------------------------------------------------------------
 
 _VALID_MODES = {"part", "assembly", "sketch"}
-_VALID_OUTPUTS = {"3d_solid", "surface", "2d_vector"}
+_VALID_OUTPUTS = {"3d_solid", "surface", "2d_vector", "1d_path"}
 _MAX_PROMPT_CHARS = int(os.environ.get("NATURALCAD_MAX_PROMPT_CHARS", "1200"))
 
 _RATE_WINDOW_SECONDS = int(os.environ.get("NATURALCAD_RATE_WINDOW_SECONDS", "60"))
@@ -401,6 +401,11 @@ _OUTPUT_RULES = {
         "Extrude with a minimal thickness of 1 mm so the geometry exports as STL/STEP. "
         "result must be a Part (bp.part)."
     ),
+    "1d_path": (
+        "Output goal: a 1D path-style layout (linework/centerlines). Build the geometry from lines/arcs on Plane.XY. "
+        "For compatibility with STL/STEP preview, give the path a minimal thickness (about 1 mm) by using a thin profile. "
+        "result must be a Part (bp.part)."
+    ),
 }
 
 _MODE_HINTS = {
@@ -646,7 +651,7 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
         if log_generated_code:
             _log_info(f"Generated code:\n{generated_code}")
 
-        from build123d import export_stl, export_step
+        from build123d import Axis, ExportDXF, Unit, export_step, export_stl
 
         with tempfile.TemporaryDirectory() as tmpdir:
             script_path = Path(tmpdir) / "script.py"
@@ -727,13 +732,14 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
                     }
 
             # ----------------------------------------------------------------
-            # Export: STL, STEP, GLB
+            # Export: STL, STEP, GLB, DXF
             # ----------------------------------------------------------------
             shape = result_shape
             urls = {}
             stl_path = Path(tmpdir) / "output.stl"
             step_path = Path(tmpdir) / "output.step"
             glb_path = Path(tmpdir) / "output.glb"
+            dxf_path = Path(tmpdir) / "output.dxf"
 
             try:
                 export_stl(shape, str(stl_path))
@@ -765,6 +771,24 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
             except Exception as e:
                 _log_error(f"GLB export failed: {e}")
 
+            try:
+                if output_type in {"2d_vector", "1d_path"}:
+                    exporter = ExportDXF(unit=Unit.MM)
+                    if output_type == "1d_path":
+                        exporter.add_shape(shape.edges())
+                    else:
+                        faces = shape.faces()
+                        if faces:
+                            top_face = faces.sort_by(Axis.Z)[-1]
+                            wires = [top_face.outer_wire(), *list(top_face.inner_wires())]
+                            exporter.add_shape(wires)
+                        else:
+                            exporter.add_shape(shape.edges())
+                    exporter.write(str(dxf_path))
+                    _log_info(f"DXF exported: {dxf_path.exists()}")
+            except Exception as e:
+                _log_error(f"DXF export failed: {e}")
+
             # ----------------------------------------------------------------
             # Upload to Supabase storage
             # ----------------------------------------------------------------
@@ -772,6 +796,8 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
                 ("stl", stl_path, "model/stl"),
                 ("step", step_path, "application/octet-stream"),
             ]
+            if dxf_path.exists():
+                file_pairs.append(("dxf", dxf_path, "application/dxf"))
             if store_glb:
                 file_pairs.append(("glb", glb_path, "model/gltf-binary"))
             for fmt, file_path, content_type in file_pairs:

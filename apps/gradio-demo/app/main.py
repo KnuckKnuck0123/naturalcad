@@ -40,6 +40,7 @@ EXAMPLE_PROMPTS = [
     ["Industrial notched tower block, 140 mm tall", "part", "3d_solid"],
     ["Smooth roof canopy surface, 200 mm span, shallow rise", "part", "surface"],
     ["Bracket plate profile with 6 holes for a laser-cut sketch", "sketch", "2d_vector"],
+    ["Single-line floor route centerline with 3 jogs, 120 mm long", "sketch", "1d_path"],
 ]
 
 DEFAULT_CODE = '''from build123d import *
@@ -531,7 +532,7 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                 result = json.loads(response.read().decode())
 
                 if "error" in result:
-                    return None, None, None, f"Error from backend:\n{result['error']}", "Backend generation failed."
+                    return None, None, None, None, f"Error from backend:\n{result['error']}", "Backend generation failed."
 
                 urls = result.get("urls", {})
                 code = result.get("generated_code", "")
@@ -540,6 +541,7 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                 glb_url = urls.get("glb")
                 stl_url = urls.get("stl")
                 step_url = urls.get("step")
+                dxf_url = urls.get("dxf")
                 
                 # Download files to artifacts directory (same as local mode)
                 # so Gradio can serve them properly
@@ -550,6 +552,7 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                 glb_file = None
                 stl_file = None
                 step_file = None
+                dxf_file = None
                 
                 if glb_url:
                     glb_path = run_dir / f"{run_id}.glb"
@@ -602,6 +605,23 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                         _log_error(f"STEP download failed: {e}")
                         step_file = None
 
+                if dxf_url:
+                    dxf_path = run_dir / f"{run_id}.dxf"
+                    _log_info(f"Downloading DXF from {dxf_url}")
+                    try:
+                        with request.urlopen(dxf_url) as r:
+                            data = r.read()
+                            _log_info(f"Downloaded DXF bytes: {len(data)}")
+                            if len(data) < 100:
+                                _log_error("DXF file too small")
+                            with open(dxf_path, "wb") as f:
+                                f.write(data)
+                        dxf_file = str(dxf_path)
+                        _log_info(f"DXF saved to {dxf_file}, size {os.path.getsize(dxf_file)}")
+                    except Exception as e:
+                        _log_error(f"DXF download failed: {e}")
+                        dxf_file = None
+
                 if not glb_file and stl_file:
                     try:
                         glb_path = run_dir / f"{run_id}.glb"
@@ -623,17 +643,18 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                 final_summary = f"Model ready!{' · ' + job_id[:8] if job_id else ''}"
                 preview_file = glb_file
 
-                return preview_file, stl_file, step_file, combined_logs, final_summary
+                return preview_file, stl_file, step_file, dxf_file, combined_logs, final_summary
         except error.HTTPError as exc:
             body = exc.read().decode() if exc.fp else ""
             try:
                 detail = json.loads(body).get("error", body) if body else str(exc)
             except Exception:
                 detail = body or str(exc)
-            return None, None, None, f"Backend HTTP {exc.code}: {detail}", "Generation failed."
+            return None, None, None, None, f"Backend HTTP {exc.code}: {detail}", "Generation failed."
         except error.URLError as exc:
             if isinstance(exc.reason, TimeoutError) or "timed out" in str(exc.reason).lower():
                 return (
+                    None,
                     None,
                     None,
                     None,
@@ -643,9 +664,10 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                     ),
                     "Generation timed out.",
                 )
-            return None, None, None, f"Backend error: {exc}", "Generation failed."
+            return None, None, None, None, f"Backend error: {exc}", "Generation failed."
         except TimeoutError:
             return (
+                None,
                 None,
                 None,
                 None,
@@ -656,7 +678,7 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                 "Generation timed out.",
             )
         except Exception as exc:
-            return None, None, None, f"Backend error: {exc}", "Generation failed."
+            return None, None, None, None, f"Backend error: {exc}", "Generation failed."
     
     # Fallback to local code stub if backend is missing
     spec = {
@@ -667,7 +689,7 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
     code = render_code_from_spec(spec)
     combined_logs = f"Local fallback:\n{code}"
     final_summary = "Code generated."
-    return None, None, None, combined_logs, final_summary
+    return None, None, None, None, combined_logs, final_summary
 
 
 def use_example(prompt: str, mode: str, output_type: str):
@@ -693,7 +715,7 @@ def build_ui() -> gr.Blocks:
                 )
                 with gr.Row():
                     mode_picker = gr.Dropdown(choices=["part", "assembly", "sketch"], value="part", label="Mode")
-                    output_picker = gr.Dropdown(choices=["3d_solid", "surface", "2d_vector"], value="3d_solid", label="Output")
+                    output_picker = gr.Dropdown(choices=["3d_solid", "surface", "2d_vector", "1d_path"], value="3d_solid", label="Output")
                 generate_btn = gr.Button("Generate Model", variant="primary")
                 gr.Markdown("### Try one of these")
                 gr.Examples(
@@ -709,6 +731,7 @@ def build_ui() -> gr.Blocks:
                 with gr.Row():
                     stl_download = gr.File(label="Download STL")
                     step_download = gr.File(label="Download STEP")
+                    dxf_download = gr.File(label="Download DXF")
                 status_output = gr.Markdown("Ready. Use the mouse to orbit, pan, and zoom the model.")
 
         log_output = gr.Textbox(
@@ -722,7 +745,7 @@ def build_ui() -> gr.Blocks:
         generate_btn.click(
             fn=generate_from_prompt,
             inputs=[prompt_input, mode_picker, output_picker],
-            outputs=[model_viewer, stl_download, step_download, log_output, status_output],
+            outputs=[model_viewer, stl_download, step_download, dxf_download, log_output, status_output],
         )
 
     return demo
