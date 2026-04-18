@@ -24,6 +24,7 @@ BUILD123D_PYTHON = os.getenv("BUILD123D_PYTHON", sys.executable)
 BACKEND_URL = os.getenv("NATURALCAD_BACKEND_URL", os.getenv("NL_CAD_BACKEND_URL", "")).strip()
 BACKEND_API_KEY = os.getenv("NATURALCAD_API_KEY", os.getenv("NL_CAD_API_KEY", ""))
 BACKEND_TIMEOUT_SECONDS = float(os.getenv("NATURALCAD_BACKEND_TIMEOUT", "60"))
+SHOW_GENERATED_CODE = os.getenv("NATURALCAD_SHOW_CODE", "false").strip().lower() in {"1", "true", "yes", "on"}
 ARTIFACTS_DIR = Path(__file__).parent.parent / "artifacts"
 RUNS_DIR = ARTIFACTS_DIR / "runs"
 LOGS_DIR = ARTIFACTS_DIR / "logs"
@@ -552,7 +553,10 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                         print(f"DEBUG: STEP download failed: {e}")
                         step_file = None
                 
-                combined_logs = f"Generated build123d code:\n\n{code}\n\n"
+                if SHOW_GENERATED_CODE:
+                    combined_logs = f"Generated build123d code:\n\n{code}\n\n"
+                else:
+                    combined_logs = "Generation complete. (Code hidden; set NATURALCAD_SHOW_CODE=true to display.)\n\n"
                 combined_logs += "Execution complete. Artifacts uploaded to Supabase."
                 if job_id:
                     combined_logs += f"\nJob ID: {job_id}"
