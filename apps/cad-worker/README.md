@@ -37,6 +37,8 @@ OPENROUTER_REFERER=https://huggingface.co/spaces/noahtheboa/naturalcad  # option
 OPENROUTER_TITLE=NaturalCAD  # optional
 NATURALCAD_LOG_CODE=false  # optional, default false
 NATURALCAD_INCLUDE_CODE_IN_RESPONSE=false  # optional, default false
+NATURALCAD_STORE_CODE=true  # optional, default true (stores generated code in DB)
+NATURALCAD_STORE_GLB=false  # optional, default false (skip GLB upload to storage)
 ```
 
 Also required for uploads/logging:

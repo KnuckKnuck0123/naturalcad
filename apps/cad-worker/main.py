@@ -308,12 +308,19 @@ def _log_job_to_supabase(
         "mode": mode,
         "output_type": output_type,
     }
+    store_code = os.environ.get("NATURALCAD_STORE_CODE", "true").strip().lower() in {"1", "true", "yes", "on"}
+    if store_code and generated_code:
+        payload["generated_code"] = generated_code
     if error:
         payload["error_text"] = error
 
     try:
         with httpx.Client() as client:
             resp = client.post(endpoint, json=payload, headers=headers)
+            if resp.status_code >= 400 and "generated_code" in payload:
+                # Backward-compat fallback for schemas that do not yet have generated_code.
+                payload.pop("generated_code", None)
+                resp = client.post(endpoint, json=payload, headers=headers)
             if resp.status_code >= 400:
                 print(f"DB log failed for job {job_id}: {resp.text}")
             else:
@@ -555,6 +562,7 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
     openrouter_model = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-opus-4.7")
     log_generated_code = os.environ.get("NATURALCAD_LOG_CODE", "false").strip().lower() in {"1", "true", "yes", "on"}
     include_code_in_response = os.environ.get("NATURALCAD_INCLUDE_CODE_IN_RESPONSE", "false").strip().lower() in {"1", "true", "yes", "on"}
+    store_glb = os.environ.get("NATURALCAD_STORE_GLB", "false").strip().lower() in {"1", "true", "yes", "on"}
 
     mode_hint = _MODE_HINTS.get(mode, _MODE_HINTS["part"])
     output_rule = _OUTPUT_RULES.get(output_type, _OUTPUT_RULES["3d_solid"])
@@ -751,8 +759,9 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
             file_pairs = [
                 ("stl", stl_path, "model/stl"),
                 ("step", step_path, "application/octet-stream"),
-                ("glb", glb_path, "model/gltf-binary"),
             ]
+            if store_glb:
+                file_pairs.append(("glb", glb_path, "model/gltf-binary"))
             for fmt, file_path, content_type in file_pairs:
                 if not file_path or not file_path.exists():
                     continue

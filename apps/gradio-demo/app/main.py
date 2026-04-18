@@ -552,7 +552,23 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                     except Exception as e:
                         print(f"DEBUG: STEP download failed: {e}")
                         step_file = None
-                
+
+                if not glb_file and stl_file:
+                    try:
+                        mesh = trimesh.load_mesh(str(stl_file), force="mesh")
+                        mesh.apply_transform([
+                            [1, 0, 0, 0],
+                            [0, 0, 1, 0],
+                            [0, -1, 0, 0],
+                            [0, 0, 0, 1],
+                        ], False)
+                        glb_path = run_dir / f"{run_id}.glb"
+                        mesh.export(str(glb_path))
+                        glb_file = str(glb_path)
+                        print(f"DEBUG: Generated local GLB from STL at {glb_file}")
+                    except Exception as e:
+                        print(f"DEBUG: Local GLB generation failed: {e}")
+
                 if SHOW_GENERATED_CODE:
                     combined_logs = f"Generated build123d code:\n\n{code}\n\n"
                 else:
