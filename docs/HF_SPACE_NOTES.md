@@ -2,20 +2,21 @@
 
 ## Current intent
 - Public-facing NaturalCAD app
-- build123d-backed execution loop
-- Noah will wire a service endpoint for LLM generation later
+- Modal-hosted build123d execution loop
+- OpenRouter-backed model generation
 
 ## Current prototype state
 - Gradio UI
-- real build123d execution
-- STL preview
+- Modal endpoint execution with API-key gate
+- GLB viewer preview (server GLB when available, local STL→GLB fallback otherwise)
 - STL + STEP downloads
 - starter sample picker
-- prompt note field for future LLM integration
+- runtime logs default to error-only
+- generated code hidden from UI logs by default
 - archived per-run artifacts under `artifacts/runs/`
 
 ## Next likely steps
-- add endpoint config pattern for external LLM service
-- convert prompt note into real prompt-to-code flow
-- improve public-facing examples
-- add safe execution constraints for Spaces
+- add 1D/line output mode (DXF/SVG)
+- improve assembly reliability (multi-stage planning)
+- wire custom domain for public staging
+- finalize org Space workflow for team collaboration

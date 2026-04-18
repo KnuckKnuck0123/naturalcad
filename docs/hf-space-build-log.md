@@ -8,6 +8,32 @@
 
 ## Build Attempts
 
+### Attempt 8 - Modal + OpenRouter production wiring and alpha hardening
+**Date:** `2026-04-18`  
+**Result:** `SUCCESS`
+
+Key changes shipped:
+- switched worker LLM provider from Hugging Face Inference to OpenRouter
+- default model moved to `anthropic/claude-opus-4.7` (configurable via `OPENROUTER_MODEL`)
+- fail-closed API key auth (`NATURALCAD_API_KEY` required)
+- added prompt length limits, per-IP/per-key rate limiting, and run queue caps
+- added generated-code AST safety guard and restricted execution builtins
+- disabled generated code exposure by default (UI logs, API response, worker logs)
+- enabled DB code storage by default (`NATURALCAD_STORE_CODE=true`)
+- disabled GLB object storage by default (`NATURALCAD_STORE_GLB=false`) while preserving GLB preview by local STL→GLB conversion in UI
+- removed tracked runtime log artifact `apps/gradio-demo/artifacts/logs/runs.jsonl`
+- added `scripts/prepush-check.sh` and `docs/github-push-safety.md`
+
+Operational notes:
+- OpenRouter requests return `402` until prepaid credits are added to the key's account/org
+- local `npm run backend:local` now falls back to `archive/gradio-demo-backend-legacy` because `apps/backend-api` was removed earlier
+
+Current endpoint used by Space:
+- `NATURALCAD_BACKEND_URL=https://knuckknuck0123--naturalcad-generate-cad-endpoint.modal.run`
+
+Current Space secrets:
+- `NATURALCAD_API_KEY`
+
 ### Attempt 1 - Initial push
 **Commit:** `5955d34`  
 **Error:** `RUNTIME_ERROR`  
