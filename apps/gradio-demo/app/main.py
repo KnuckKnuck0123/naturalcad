@@ -23,7 +23,7 @@ import trimesh
 BUILD123D_PYTHON = os.getenv("BUILD123D_PYTHON", sys.executable)
 BACKEND_URL = os.getenv("NATURALCAD_BACKEND_URL", os.getenv("NL_CAD_BACKEND_URL", "")).strip()
 BACKEND_API_KEY = os.getenv("NATURALCAD_API_KEY", os.getenv("NL_CAD_API_KEY", ""))
-BACKEND_TIMEOUT_SECONDS = float(os.getenv("NATURALCAD_BACKEND_TIMEOUT", "60"))
+BACKEND_TIMEOUT_SECONDS = float(os.getenv("NATURALCAD_BACKEND_TIMEOUT", "180"))
 SHOW_GENERATED_CODE = os.getenv("NATURALCAD_SHOW_CODE", "false").strip().lower() in {"1", "true", "yes", "on"}
 VERBOSE_LOGS = os.getenv("NATURALCAD_VERBOSE_LOGS", "false").strip().lower() in {"1", "true", "yes", "on"}
 ARTIFACTS_DIR = Path(__file__).parent.parent / "artifacts"
@@ -334,6 +334,24 @@ def create_job(prompt: str, mode: str, output_type: str) -> tuple[dict | None, s
     except error.HTTPError as exc:
         detail = exc.read().decode() if exc.fp else str(exc)
         return None, json.dumps({"error": f"backend http {exc.code}", "detail": detail}, indent=2)
+    except error.URLError as exc:
+        if isinstance(exc.reason, TimeoutError) or "timed out" in str(exc.reason).lower():
+            return None, json.dumps(
+                {
+                    "error": f"backend timeout after {BACKEND_TIMEOUT_SECONDS:.0f}s",
+                    "detail": "Try a shorter prompt or retry.",
+                },
+                indent=2,
+            )
+        return None, json.dumps({"error": f"backend unavailable: {exc}"}, indent=2)
+    except TimeoutError:
+        return None, json.dumps(
+            {
+                "error": f"backend timeout after {BACKEND_TIMEOUT_SECONDS:.0f}s",
+                "detail": "Try a shorter prompt or retry.",
+            },
+            indent=2,
+        )
     except Exception as exc:  # noqa: BLE001
         return None, json.dumps({"error": f"backend unavailable: {exc}"}, indent=2)
 
@@ -613,6 +631,30 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
             except Exception:
                 detail = body or str(exc)
             return None, None, None, f"Backend HTTP {exc.code}: {detail}", "Generation failed."
+        except error.URLError as exc:
+            if isinstance(exc.reason, TimeoutError) or "timed out" in str(exc.reason).lower():
+                return (
+                    None,
+                    None,
+                    None,
+                    (
+                        f"Backend timeout after {BACKEND_TIMEOUT_SECONDS:.0f}s. "
+                        "Try a shorter prompt (fewer clauses), or retry."
+                    ),
+                    "Generation timed out.",
+                )
+            return None, None, None, f"Backend error: {exc}", "Generation failed."
+        except TimeoutError:
+            return (
+                None,
+                None,
+                None,
+                (
+                    f"Backend timeout after {BACKEND_TIMEOUT_SECONDS:.0f}s. "
+                    "Try a shorter prompt (fewer clauses), or retry."
+                ),
+                "Generation timed out.",
+            )
         except Exception as exc:
             return None, None, None, f"Backend error: {exc}", "Generation failed."
     
