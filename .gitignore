@@ -11,6 +11,7 @@ __pycache__/
 !**/artifacts/runs/.gitkeep
 !**/artifacts/logs/
 !**/artifacts/logs/.gitkeep
+**/artifacts/logs/*.jsonl
 .env
 .env.*
 .vite/

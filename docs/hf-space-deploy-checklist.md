@@ -27,9 +27,18 @@ Space env:
 - secret: `NATURALCAD_API_KEY`
 
 Backend host:
-- current recommended host: Fly.io
-- current recommended backend port: `8000`
-- backend should expose `GET /v1/health`, `POST /v1/generate-spec`, `POST /v1/jobs`, and `POST /v1/jobs/{job_id}/artifacts`
+- current recommended host: Modal web endpoint (`generate_cad_endpoint`)
+- endpoint method: `POST /`
+- backend requires header `x-api-key: <NATURALCAD_API_KEY>`
+- response should include `job_id`, `generated_code`, and artifact `urls`
+
+Worker env/secrets:
+- `OPENROUTER_API_KEY`
+- `OPENROUTER_MODEL` (optional)
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_BUCKET`
+- `NATURALCAD_API_KEY`
 
 Runtime note:
 - the Space Docker image must include the native stack needed by `build123d` / `OCP`
@@ -49,3 +58,12 @@ Runtime note:
 - success or failure
 - runtime seconds
 - error string if any
+
+## Security checks before publish
+
+- [ ] `NATURALCAD_API_KEY` is set on Space and Modal
+- [ ] backend endpoint rejects requests without `x-api-key`
+- [ ] rate limiting is active (IP + key)
+- [ ] prompt length caps enforced
+- [ ] generated code safety guard enabled
+- [ ] no tracked `artifacts/logs/*.jsonl`
