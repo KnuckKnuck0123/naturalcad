@@ -587,8 +587,9 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                 if job_id:
                     combined_logs += f"\nJob ID: {job_id}"
                 final_summary = f"Model ready!{' · ' + job_id[:8] if job_id else ''}"
+                preview_file = glb_file or stl_file
 
-                return glb_file, stl_file, step_file, combined_logs, final_summary
+                return preview_file, stl_file, step_file, combined_logs, final_summary
         except error.HTTPError as exc:
             body = exc.read().decode() if exc.fp else ""
             try:
