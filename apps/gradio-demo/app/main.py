@@ -39,6 +39,7 @@ EXAMPLE_PROMPTS = [
     ["Light structural truss beam with 9 panels and a 180 mm span", "part", "3d_solid"],
     ["Industrial notched tower block, 140 mm tall", "part", "3d_solid"],
     ["Smooth roof canopy surface, 200 mm span, shallow rise", "part", "surface"],
+    ["Laser-cut mounting plate with 6mm corner holes, 120x70 mm (export DXF)", "sketch", "2d_vector"],
     ["Bracket plate profile with 6 holes for a laser-cut sketch", "sketch", "2d_vector"],
     ["Single-line floor route centerline with 3 jogs, 120 mm long", "sketch", "1d_path"],
 ]
