@@ -213,7 +213,7 @@ def _validate_generated_code(code: str) -> tuple[bool, str | None]:
 
 
 def _exec_with_timeout(code: str, script_path: Path, exec_globals: dict) -> None:
-    timeout_seconds = max(1, int(os.environ.get("NATURALCAD_EXEC_TIMEOUT_SECONDS", "20")))
+    timeout_seconds = max(1, int(os.environ.get("NATURALCAD_EXEC_TIMEOUT_SECONDS", "60")))
 
     # SIGALRM only works on the main thread. Modal may invoke this handler on
     # a worker thread, so fall back to direct exec in that case.
@@ -423,6 +423,7 @@ Rules:
 8. NEVER use standalone rotate() or translate(). Use with Locations((x, y, z)): or obj.rotate(Axis.Z, angle).
 9. extrude() takes amount= (e.g. extrude(amount=10)) or both=True. Do NOT use start= or distance=.
 10. extrude() must be called inside a BuildPart context, immediately after a BuildSketch block.
+11. Keep geometry complexity bounded. Prefer a simplified form over many tiny repeated features.
 
 Canonical skeleton (adapt dimensions and features to the request):
 from build123d import *
@@ -617,7 +618,7 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
                 "temperature": 0.2,
             }
 
-            with httpx.Client(timeout=120.0) as client:
+            with httpx.Client(timeout=180.0) as client:
                 response = client.post(openrouter_api_url, headers=headers, json=payload)
 
             if response.status_code >= 400:
