@@ -115,6 +115,8 @@ See `docs/github-push-safety.md` for the full branch and review policy.
 
 - `docs/hf-space-mvp.md`
 - `docs/hf-space-deploy-checklist.md`
+- `docs/startup-shutdown-playbook.md`
 - `docs/publish-checklist.md`
 - `docs/backend-v0.md`
 - `docs/security-policy-v0.md`
+- `docs/engine-assembly-milestone.md`
