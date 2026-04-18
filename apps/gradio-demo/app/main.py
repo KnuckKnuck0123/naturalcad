@@ -25,6 +25,7 @@ BACKEND_URL = os.getenv("NATURALCAD_BACKEND_URL", os.getenv("NL_CAD_BACKEND_URL"
 BACKEND_API_KEY = os.getenv("NATURALCAD_API_KEY", os.getenv("NL_CAD_API_KEY", ""))
 BACKEND_TIMEOUT_SECONDS = float(os.getenv("NATURALCAD_BACKEND_TIMEOUT", "60"))
 SHOW_GENERATED_CODE = os.getenv("NATURALCAD_SHOW_CODE", "false").strip().lower() in {"1", "true", "yes", "on"}
+VERBOSE_LOGS = os.getenv("NATURALCAD_VERBOSE_LOGS", "false").strip().lower() in {"1", "true", "yes", "on"}
 ARTIFACTS_DIR = Path(__file__).parent.parent / "artifacts"
 RUNS_DIR = ARTIFACTS_DIR / "runs"
 LOGS_DIR = ARTIFACTS_DIR / "logs"
@@ -57,6 +58,15 @@ with BuildPart() as bp:
 
 result = bp.part
 '''
+
+
+def _log_info(message: str) -> None:
+    if VERBOSE_LOGS:
+        print(message)
+
+
+def _log_error(message: str) -> None:
+    print(message)
 
 
 def _legacy_spec_from_semantic(spec: dict) -> dict:
@@ -504,53 +514,53 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                 
                 if glb_url:
                     glb_path = run_dir / f"{run_id}.glb"
-                    print(f"DEBUG: Downloading GLB from {glb_url}")
+                    _log_info(f"Downloading GLB from {glb_url}")
                     try:
                         with request.urlopen(glb_url) as r:
                             data = r.read()
-                            print(f"DEBUG: Downloaded {len(data)} bytes")
+                            _log_info(f"Downloaded GLB bytes: {len(data)}")
                             if len(data) < 100:
-                                print(f"DEBUG: WARNING - GLB file too small: {data}")
+                                _log_error("GLB file too small")
                             with open(glb_path, "wb") as f:
                                 f.write(data)
                         glb_file = str(glb_path)
-                        print(f"DEBUG: GLB saved to {glb_file}, size {os.path.getsize(glb_file)}")
+                        _log_info(f"GLB saved to {glb_file}, size {os.path.getsize(glb_file)}")
                     except Exception as e:
-                        print(f"DEBUG: GLB download failed: {e}")
+                        _log_error(f"GLB download failed: {e}")
                         glb_file = None
                     
                 if stl_url:
                     stl_path = run_dir / f"{run_id}.stl"
-                    print(f"DEBUG: Downloading STL from {stl_url}")
+                    _log_info(f"Downloading STL from {stl_url}")
                     try:
                         with request.urlopen(stl_url) as r:
                             data = r.read()
-                            print(f"DEBUG: Downloaded {len(data)} bytes")
+                            _log_info(f"Downloaded STL bytes: {len(data)}")
                             if len(data) < 100:
-                                print(f"DEBUG: WARNING - STL file too small: {data}")
+                                _log_error("STL file too small")
                             with open(stl_path, "wb") as f:
                                 f.write(data)
                         stl_file = str(stl_path)
-                        print(f"DEBUG: STL saved to {stl_file}, size {os.path.getsize(stl_file)}")
+                        _log_info(f"STL saved to {stl_file}, size {os.path.getsize(stl_file)}")
                     except Exception as e:
-                        print(f"DEBUG: STL download failed: {e}")
+                        _log_error(f"STL download failed: {e}")
                         stl_file = None
                     
                 if step_url:
                     step_path = run_dir / f"{run_id}.step"
-                    print(f"DEBUG: Downloading STEP from {step_url}")
+                    _log_info(f"Downloading STEP from {step_url}")
                     try:
                         with request.urlopen(step_url) as r:
                             data = r.read()
-                            print(f"DEBUG: Downloaded {len(data)} bytes")
+                            _log_info(f"Downloaded STEP bytes: {len(data)}")
                             if len(data) < 100:
-                                print(f"DEBUG: WARNING - STEP file too small: {data}")
+                                _log_error("STEP file too small")
                             with open(step_path, "wb") as f:
                                 f.write(data)
                         step_file = str(step_path)
-                        print(f"DEBUG: STEP saved to {step_file}, size {os.path.getsize(step_file)}")
+                        _log_info(f"STEP saved to {step_file}, size {os.path.getsize(step_file)}")
                     except Exception as e:
-                        print(f"DEBUG: STEP download failed: {e}")
+                        _log_error(f"STEP download failed: {e}")
                         step_file = None
 
                 if not glb_file and stl_file:
@@ -565,9 +575,9 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                         glb_path = run_dir / f"{run_id}.glb"
                         mesh.export(str(glb_path))
                         glb_file = str(glb_path)
-                        print(f"DEBUG: Generated local GLB from STL at {glb_file}")
+                        _log_info(f"Generated local GLB from STL at {glb_file}")
                     except Exception as e:
-                        print(f"DEBUG: Local GLB generation failed: {e}")
+                        _log_error(f"Local GLB generation failed: {e}")
 
                 if SHOW_GENERATED_CODE:
                     combined_logs = f"Generated build123d code:\n\n{code}\n\n"

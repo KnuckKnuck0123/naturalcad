@@ -115,6 +115,17 @@ _SAFE_BUILTINS = {
     "ValueError": ValueError,
 }
 
+_VERBOSE_LOGS = os.environ.get("NATURALCAD_VERBOSE_LOGS", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _log_info(message: str) -> None:
+    if _VERBOSE_LOGS:
+        print(message)
+
+
+def _log_error(message: str) -> None:
+    print(message)
+
 
 def _client_ip(request: Request) -> str:
     xff = request.headers.get("x-forwarded-for", "").strip()
@@ -291,7 +302,7 @@ def _log_job_to_supabase(
     key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
     if not url or not key:
-        print("Skipping DB logging: SUPABASE_URL or key not set")
+        _log_info("Skipping DB logging: SUPABASE_URL or key not set")
         return
 
     endpoint = f"{url}/rest/v1/jobs"
@@ -322,11 +333,11 @@ def _log_job_to_supabase(
                 payload.pop("generated_code", None)
                 resp = client.post(endpoint, json=payload, headers=headers)
             if resp.status_code >= 400:
-                print(f"DB log failed for job {job_id}: {resp.text}")
+                _log_error(f"DB log failed for job {job_id}: {resp.text}")
             else:
-                print(f"DB log OK for job {job_id} (status={status})")
+                _log_info(f"DB log OK for job {job_id} (status={status})")
     except Exception as e:
-        print(f"DB log error for job {job_id}: {e}")
+        _log_error(f"DB log error for job {job_id}: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -586,7 +597,7 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
     ]
 
     for attempt in range(max_attempts):
-        print(f"LLM call {attempt + 1}/{max_attempts} | mode={mode} output_type={output_type}")
+        _log_info(f"LLM call {attempt + 1}/{max_attempts} | mode={mode} output_type={output_type}")
         try:
             headers = {
                 "Authorization": f"Bearer {openrouter_api_key}",
@@ -610,13 +621,13 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
                 response = client.post(openrouter_api_url, headers=headers, json=payload)
 
             if response.status_code >= 400:
-                print(f"OpenRouter error {response.status_code}: {response.text[:500]}")
+                _log_error(f"OpenRouter error {response.status_code}: {response.text[:500]}")
                 return {"error": f"LLM provider unavailable ({response.status_code}). Please retry."}
 
             data = response.json()
             generated_code = (data.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
             if not generated_code:
-                print(f"OpenRouter empty content response: {str(data)[:500]}")
+                _log_error(f"OpenRouter empty content response: {str(data)[:500]}")
                 return {"error": "LLM returned empty output. Please retry."}
 
             # Strip markdown fences (model sometimes ignores rule 1)
@@ -628,11 +639,11 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
                 generated_code = generated_code[:-3]
             generated_code = generated_code.strip()
         except Exception as e:
-            print(f"LLM call failed: {e}")
+            _log_error(f"LLM call failed: {e}")
             return {"error": "LLM call failed. Please retry."}
 
         if log_generated_code:
-            print(f"Generated code:\n{generated_code}")
+            _log_info(f"Generated code:\n{generated_code}")
 
         from build123d import export_stl, export_step
 
@@ -644,7 +655,7 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
             is_safe, safety_error = _validate_generated_code(sanitized_code)
             if not is_safe:
                 err_short = f"Rejected by AST guard: {safety_error}"
-                print(err_short)
+                _log_error(err_short)
                 if attempt < max_attempts - 1:
                     messages.append({"role": "assistant", "content": generated_code})
                     messages.append({
@@ -681,7 +692,7 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
                 import traceback as _tb
                 err_short = f"{type(e).__name__}: {e}"
                 err_trace = _tb.format_exc()
-                print(f"Execution failed: {err_short}")
+                _log_error(f"Execution failed: {err_short}")
             finally:
                 os.environ.clear()
                 os.environ.update(original_env)
@@ -695,7 +706,7 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
 
             if not exec_success:
                 if attempt < max_attempts - 1:
-                    print("Retrying with error context...")
+                    _log_info("Retrying with error context...")
                     # Cap traceback to avoid blowing the context window
                     trace_snippet = err_trace[-2000:] if len(err_trace) > 2000 else err_trace
                     messages.append({"role": "assistant", "content": generated_code})
@@ -725,16 +736,16 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
 
             try:
                 export_stl(shape, str(stl_path))
-                print(f"STL exported: {stl_path.stat().st_size} bytes")
+                _log_info(f"STL exported: {stl_path.stat().st_size} bytes")
             except Exception as e:
-                print(f"STL export failed: {e}")
+                _log_error(f"STL export failed: {e}")
                 stl_path = None
 
             try:
                 export_step(shape, str(step_path))
-                print(f"STEP exported: {step_path.exists()}")
+                _log_info(f"STEP exported: {step_path.exists()}")
             except Exception as e:
-                print(f"STEP export failed: {e}")
+                _log_error(f"STEP export failed: {e}")
                 step_path = None
 
             try:
@@ -747,11 +758,11 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
                     # Rotate to glTF Y-up convention
                     mesh.apply_transform(tf.rotation_matrix(-math.pi / 2, [1, 0, 0]))
                     mesh.export(str(glb_path))
-                    print(f"GLB exported: {glb_path.exists()}")
+                    _log_info(f"GLB exported: {glb_path.exists()}")
                 else:
-                    print("Skipping GLB: no STL file")
+                    _log_info("Skipping GLB: no STL file")
             except Exception as e:
-                print(f"GLB export failed: {e}")
+                _log_error(f"GLB export failed: {e}")
 
             # ----------------------------------------------------------------
             # Upload to Supabase storage
@@ -767,11 +778,11 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
                     continue
                 storage_key = f"runs/{run_id}/model.{fmt}"
                 file_bytes = file_path.read_bytes()
-                print(f"Uploading {fmt}: {len(file_bytes)} bytes")
+                _log_info(f"Uploading {fmt}: {len(file_bytes)} bytes")
                 try:
                     urls[fmt] = _upload_to_supabase(storage_key, file_bytes, content_type)
                 except Exception as e:
-                    print(f"Upload error for {fmt}: {e}")
+                    _log_error(f"Upload error for {fmt}: {e}")
 
             _log_job_to_supabase(run_id, prompt, mode, output_type, generated_code, "completed")
             return {
