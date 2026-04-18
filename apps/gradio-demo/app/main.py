@@ -391,6 +391,27 @@ def _append_run_log(entry: dict) -> None:
         fh.write(json.dumps(entry) + "\n")
 
 
+def _generate_glb_from_stl(stl_path: str, glb_path: str) -> None:
+    loaded = trimesh.load(stl_path)
+    if isinstance(loaded, trimesh.Scene):
+        meshes = [g for g in loaded.geometry.values() if isinstance(g, trimesh.Trimesh)]
+        if not meshes:
+            raise ValueError("No mesh geometry found in STL scene")
+        mesh = trimesh.util.concatenate(meshes)
+    elif isinstance(loaded, trimesh.Trimesh):
+        mesh = loaded
+    else:
+        raise ValueError(f"Unsupported mesh type: {type(loaded)}")
+
+    mesh.apply_transform([
+        [1, 0, 0, 0],
+        [0, 0, 1, 0],
+        [0, -1, 0, 0],
+        [0, 0, 0, 1],
+    ])
+    mesh.export(glb_path)
+
+
 def run_build123d_mock(code: str, prompt: str = "") -> tuple[str | None, str | None, str | None, str, str, str | None, float]:
     return None, None, None, "Mock execution.", "Mock mode.", "mock_id", 0.0
 
@@ -453,7 +474,7 @@ mesh.export(str(glb_file))
             return None, None, None, "\n".join(logs), f"Error: {result.returncode}", run_id, 0.0
         
         # Copy files to persistent location
-        run_dir = Path("artifacts/runs")
+        run_dir = RUNS_DIR
         run_dir.mkdir(parents=True, exist_ok=True)
         final_stl = run_dir / f"{run_id}.stl"
         final_step = run_dir / f"{run_id}.step"
@@ -504,7 +525,7 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                 
                 # Download files to artifacts directory (same as local mode)
                 # so Gradio can serve them properly
-                run_dir = Path("artifacts/runs")
+                run_dir = RUNS_DIR
                 run_dir.mkdir(parents=True, exist_ok=True)
                 run_id = uuid.uuid4().hex[:8]
                 
@@ -565,15 +586,8 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
 
                 if not glb_file and stl_file:
                     try:
-                        mesh = trimesh.load_mesh(str(stl_file), force="mesh")
-                        mesh.apply_transform([
-                            [1, 0, 0, 0],
-                            [0, 0, 1, 0],
-                            [0, -1, 0, 0],
-                            [0, 0, 0, 1],
-                        ])
                         glb_path = run_dir / f"{run_id}.glb"
-                        mesh.export(str(glb_path))
+                        _generate_glb_from_stl(str(stl_file), str(glb_path))
                         glb_file = str(glb_path)
                         _log_info(f"Generated local GLB from STL at {glb_file}")
                     except Exception as e:
@@ -586,8 +600,10 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                 combined_logs += "Execution complete. Artifacts uploaded to Supabase."
                 if job_id:
                     combined_logs += f"\nJob ID: {job_id}"
+                if not glb_file and stl_file:
+                    combined_logs += "\nPreview unavailable: could not generate GLB from STL."
                 final_summary = f"Model ready!{' · ' + job_id[:8] if job_id else ''}"
-                preview_file = glb_file or stl_file
+                preview_file = glb_file
 
                 return preview_file, stl_file, step_file, combined_logs, final_summary
         except error.HTTPError as exc:
