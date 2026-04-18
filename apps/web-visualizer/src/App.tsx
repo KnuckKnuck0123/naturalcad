@@ -1,270 +1,136 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
+import { FormEvent, useMemo, useState } from 'react';
 
-const SAMPLE_SNIPPET = `from build123d import *
-
-# Simple parametric puck
-radius = 15
-height = 8
-
-with BuildPart() as bp:
-    with BuildSketch(Plane.XY) as base:
-        Circle(radius)
-        PolarLocations(radius / 2, 6)
-        Circle(radius / 6)
-    extrude(amount=height)
-
-result = bp.part`;
-
-type LogEntry = {
-  id: string;
-  message: string;
-  level: 'info' | 'error';
+type SpecPreview = {
+  intent: string;
+  mode: 'part' | 'assembly' | 'sketch';
+  output: '3d_solid' | 'surface' | '2d_vector' | '1d_path';
+  notes: string[];
 };
 
-const loader = new STLLoader();
+const defaultPrompt = 'A modular steel bracket with 4 bolt holes and a cable channel';
+
+const features = [
+  {
+    title: 'Prompt to geometry in one flow',
+    body: 'Natural-language input, generated build123d logic, and export-ready CAD artifacts in one run.'
+  },
+  {
+    title: 'Export-first workflow',
+    body: 'STEP and STL for fabrication, DXF for linework and laser workflows, with lineage per run.'
+  },
+  {
+    title: 'Enterprise controls ready',
+    body: 'Structured API boundaries, auth gates, observability, and path to RBAC and tenant isolation.'
+  }
+];
+
+const steps = [
+  'Describe the object in plain language.',
+  'NaturalCAD resolves intent into CAD-safe generation logic.',
+  'Review the model, then download STEP/STL/DXF artifacts.'
+];
+
+function inferSpec(prompt: string): SpecPreview {
+  const text = prompt.toLowerCase();
+  const is2d = /dxf|profile|laser|plate|outline/.test(text);
+  const is1d = /route|centerline|path|wire/.test(text);
+  const output = is1d ? '1d_path' : is2d ? '2d_vector' : '3d_solid';
+
+  return {
+    intent: prompt.trim() || defaultPrompt,
+    mode: output === '3d_solid' ? 'part' : 'sketch',
+    output,
+    notes: [
+      'Dimension constraints inferred from prompt language.',
+      'Geometry kept bounded for stable generation latency.',
+      'Artifacts prepared for downstream CAD handoff.'
+    ]
+  };
+}
 
 export default function App() {
-  const [code, setCode] = useState(SAMPLE_SNIPPET);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [status, setStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
-  const [artifactUrl, setArtifactUrl] = useState<string | null>(null);
-  const [stepUrl, setStepUrl] = useState<string | null>(null);
-  const viewerRef = useRef<HTMLDivElement | null>(null);
-  const eventSourceRef = useRef<EventSource | null>(null);
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const sceneRef = useRef<THREE.Scene | null>(null);
-  const meshRef = useRef<THREE.Mesh | null>(null);
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
-  const controlsRef = useRef<OrbitControls | null>(null);
+  const [prompt, setPrompt] = useState(defaultPrompt);
+  const [submittedPrompt, setSubmittedPrompt] = useState(defaultPrompt);
 
-  const appendLog = useCallback((message: string, level: 'info' | 'error' = 'info') => {
-    setLogs((prev) => [...prev, { id: crypto.randomUUID(), message, level }]);
-  }, []);
+  const spec = useMemo(() => inferSpec(submittedPrompt), [submittedPrompt]);
 
-  useEffect(() => {
-    if (!viewerRef.current) return;
-
-    const width = viewerRef.current.clientWidth;
-    const height = viewerRef.current.clientHeight;
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x020617);
-
-    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
-    camera.position.set(60, 45, 60);
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(width, height);
-    renderer.setPixelRatio(window.devicePixelRatio);
-
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-
-    const ambient = new THREE.AmbientLight(0xffffff, 0.6);
-    const dir = new THREE.DirectionalLight(0xffffff, 0.8);
-    dir.position.set(50, 80, 30);
-
-    const grid = new THREE.GridHelper(120, 20, 0x172554, 0x1e293b);
-
-    scene.add(ambient);
-    scene.add(dir);
-    scene.add(grid);
-
-    viewerRef.current.appendChild(renderer.domElement);
-
-    sceneRef.current = scene;
-    rendererRef.current = renderer;
-    cameraRef.current = camera;
-    controlsRef.current = controls;
-
-    const animate = () => {
-      controls.update();
-      renderer.render(scene, camera);
-      requestAnimationFrame(animate);
-    };
-    animate();
-
-    const handleResize = () => {
-      if (!viewerRef.current || !rendererRef.current || !cameraRef.current) return;
-      const newWidth = viewerRef.current.clientWidth;
-      const newHeight = viewerRef.current.clientHeight;
-      rendererRef.current.setSize(newWidth, newHeight);
-      cameraRef.current.aspect = newWidth / newHeight;
-      cameraRef.current.updateProjectionMatrix();
-    };
-
-    window.addEventListener('resize', handleResize);
-
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      renderer.dispose();
-      controls.dispose();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!artifactUrl || !sceneRef.current) return;
-
-    loader.load(
-      artifactUrl,
-      (geometry) => {
-        if (meshRef.current) {
-          sceneRef.current!.remove(meshRef.current);
-          meshRef.current.geometry.dispose();
-        }
-        geometry.center();
-        geometry.computeVertexNormals();
-        const material = new THREE.MeshStandardMaterial({
-          color: 0x38bdf8,
-          metalness: 0.1,
-          roughness: 0.4
-        });
-        const mesh = new THREE.Mesh(geometry, material);
-        meshRef.current = mesh;
-        sceneRef.current!.add(mesh);
-        appendLog('STL loaded in viewer.');
-        setStatus('done');
-      },
-      undefined,
-      (error) => {
-        appendLog(`Viewer load error: ${error.message}`, 'error');
-        setStatus('error');
-      }
-    );
-  }, [artifactUrl, appendLog]);
-
-  const handleRun = () => {
-    if (!code.trim()) {
-      appendLog('Add some build123d code before running.', 'error');
-      return;
-    }
-
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-    }
-
-    setLogs([]);
-    setStatus('running');
-    setArtifactUrl(null);
-    setStepUrl(null);
-
-    const url = `/api/run?ts=${Date.now()}&code=${encodeURIComponent(code)}`;
-    const source = new EventSource(url);
-    eventSourceRef.current = source;
-
-    source.addEventListener('log', (event) => {
-      const payload = JSON.parse((event as MessageEvent).data) as { message: string; level?: 'info' | 'error' };
-      appendLog(payload.message, payload.level ?? 'info');
-    });
-
-    source.addEventListener('complete', (event) => {
-      const payload = JSON.parse((event as MessageEvent).data) as { success: boolean; stlPath?: string; stepPath?: string; error?: string };
-      if (payload.success && payload.stlPath) {
-        const finalUrl = `${payload.stlPath}?v=${Date.now()}`;
-        appendLog('Runner completed; STL ready.');
-        if (payload.stepPath) {
-          appendLog('STEP export ready.');
-          setStepUrl(`${payload.stepPath}?v=${Date.now()}`);
-        }
-        setArtifactUrl(finalUrl);
-      } else {
-        appendLog(payload.error ?? 'Runner failed.', 'error');
-        setStatus('error');
-      }
-      source.close();
-    });
-
-    source.onerror = () => {
-      appendLog('Connection interrupted.', 'error');
-      setStatus('error');
-      source.close();
-    };
+  const handleSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    setSubmittedPrompt(prompt);
   };
-
-  const handleStop = () => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
-      appendLog('Stream closed by user.');
-      setStatus('idle');
-    }
-  };
-
-  useEffect(() => {
-    return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-      }
-      if (rendererRef.current) {
-        rendererRef.current.dispose();
-      }
-      if (controlsRef.current) {
-        controlsRef.current.dispose();
-      }
-    };
-  }, []);
 
   return (
-    <div className="app-shell layout-landscape">
-      <section className="panel panel-editor">
-        <h2>build123d Prompt</h2>
-        <div className="controls">
-          <button onClick={handleRun} disabled={status === 'running'}>
-            {status === 'running' ? 'Running…' : 'Run & Stream'}
-          </button>
-          <button onClick={handleStop}>Stop</button>
+    <main className="site-shell">
+      <header className="topbar">
+        <div className="brand">NaturalCAD</div>
+        <nav>
+          <a href="#product">Product</a>
+          <a href="#workflow">Workflow</a>
+          <a href="#pilot">Pilot</a>
+        </nav>
+      </header>
+
+      <section className="hero" id="product">
+        <div>
+          <p className="eyebrow">NaturalCAD • Website Prototype v0</p>
+          <h1>Design with words. Ship real CAD artifacts.</h1>
+          <p className="hero-copy">
+            This is a first-pass front end for your domain launch. It positions NaturalCAD as a product,
+            not just a demo, while keeping a live prompt-to-spec interaction on the page.
+          </p>
+          <div className="cta-row">
+            <a className="btn btn-primary" href="https://huggingface.co/spaces/kNOWare/naturalcad" target="_blank" rel="noreferrer">
+              Open current Space
+            </a>
+            <a className="btn btn-ghost" href="#pilot">Request pilot access</a>
+          </div>
         </div>
-        <textarea
-          className="editor"
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          spellCheck={false}
-        />
-        <p style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '0.5rem' }}>
-          Tip: assign your geometry to a variable named <code>result</code> so the runner can export it.
+
+        <form className="spec-card" onSubmit={handleSubmit}>
+          <label htmlFor="prompt">Try a concept prompt</label>
+          <textarea
+            id="prompt"
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            rows={5}
+          />
+          <button className="btn btn-primary" type="submit">Preview inferred spec</button>
+
+          <pre>{JSON.stringify(spec, null, 2)}</pre>
+        </form>
+      </section>
+
+      <section className="feature-grid" aria-label="key features">
+        {features.map((feature) => (
+          <article key={feature.title} className="feature-card">
+            <h2>{feature.title}</h2>
+            <p>{feature.body}</p>
+          </article>
+        ))}
+      </section>
+
+      <section className="workflow" id="workflow">
+        <h2>How the production flow lands</h2>
+        <ol>
+          {steps.map((step) => (
+            <li key={step}>{step}</li>
+          ))}
+        </ol>
+      </section>
+
+      <section className="pilot" id="pilot">
+        <h2>Enterprise pilot</h2>
+        <p>
+          Start with one team, one artifact lane, and traceability from prompt to export. Then scale by
+          domain, policy, and workload.
         </p>
-      </section>
-
-      <section className="panel panel-viewer">
-        <div className="panel-header-row">
-          <h2>Live Model</h2>
-          <div className="status-inline">
-            <span>Status: {status}</span>
-          </div>
-        </div>
-        <div className="viewer-container viewer-container-large">
-          <div className="viewer-canvas" ref={viewerRef} />
-        </div>
-        {(artifactUrl || stepUrl) && (
-          <div className="status-row">
-            <span>Exports Ready</span>
-            <div style={{ display: 'flex', gap: '0.75rem' }}>
-              {artifactUrl && (
-                <a href={artifactUrl} download="model.stl" style={{ color: '#38bdf8' }}>
-                  Download STL
-                </a>
-              )}
-              {stepUrl && (
-                <a href={stepUrl} download="model.step" style={{ color: '#f59e0b' }}>
-                  Download STEP
-                </a>
-              )}
-            </div>
-          </div>
-        )}
-      </section>
-
-      <section className="panel panel-logs">
-        <div className="panel-header-row">
-          <h2>Runner Logs</h2>
-          <span className="log-count">{logs.length} entries</span>
-        </div>
-        <div className="logs">
-          {logs.length === 0 ? 'Awaiting output…' : logs.map((log) => `${log.level === 'error' ? '✖' : '•'} ${log.message}`).join('\n')}
+        <div className="pilot-tags">
+          <span>API-first</span>
+          <span>Audit trail</span>
+          <span>STEP/STL/DXF</span>
+          <span>Private deployment path</span>
         </div>
       </section>
-    </div>
+    </main>
   );
 }
