@@ -26,13 +26,19 @@ Auth: x-api-key header must match NATURALCAD_API_KEY secret when that secret is 
 """
 
 import modal
+import ast
+import secrets
+import signal
+import threading
+import time
+from collections import defaultdict, deque
+from contextlib import contextmanager
 from pathlib import Path
 import tempfile
 import os
-import uuid
 import httpx
 from fastapi import Request, HTTPException
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, model_validator
 
 app = modal.App("naturalcad")
 
@@ -46,7 +52,7 @@ image = (
         "libxext6",
         "libxkbcommon0",
     )
-    .pip_install("build123d==0.10.0", "trimesh", "huggingface_hub", "httpx", "fastapi", "pydantic")
+    .pip_install("build123d==0.10.0", "trimesh", "httpx", "fastapi", "pydantic")
 )
 
 
@@ -56,6 +62,165 @@ image = (
 
 _VALID_MODES = {"part", "assembly", "sketch"}
 _VALID_OUTPUTS = {"3d_solid", "surface", "2d_vector"}
+_MAX_PROMPT_CHARS = int(os.environ.get("NATURALCAD_MAX_PROMPT_CHARS", "1200"))
+
+_RATE_WINDOW_SECONDS = int(os.environ.get("NATURALCAD_RATE_WINDOW_SECONDS", "60"))
+_RATE_LIMIT_PER_IP = int(os.environ.get("NATURALCAD_RATE_LIMIT_PER_IP", "20"))
+_RATE_LIMIT_PER_KEY = int(os.environ.get("NATURALCAD_RATE_LIMIT_PER_KEY", "60"))
+_MAX_CONCURRENT_RUNS = max(1, int(os.environ.get("NATURALCAD_MAX_CONCURRENT_RUNS", "2")))
+_MAX_QUEUE_DEPTH = max(0, int(os.environ.get("NATURALCAD_MAX_QUEUE_DEPTH", "4")))
+_QUEUE_WAIT_SECONDS = max(0, int(os.environ.get("NATURALCAD_QUEUE_WAIT_SECONDS", "15")))
+
+_RUN_SLOT_SEMAPHORE = threading.BoundedSemaphore(_MAX_CONCURRENT_RUNS)
+_STATE_LOCK = threading.Lock()
+_ACTIVE_RUNS = 0
+_QUEUED_RUNS = 0
+_REQUESTS_BY_IP = defaultdict(deque)
+_REQUESTS_BY_KEY = defaultdict(deque)
+
+_BLOCKED_NAMES = {
+    "open", "exec", "eval", "compile", "__import__", "input", "breakpoint",
+    "globals", "locals", "vars", "getattr", "setattr", "delattr", "help",
+    "os", "sys", "subprocess", "socket", "httpx", "requests", "urllib",
+    "pathlib", "shutil", "tempfile", "ctypes", "multiprocessing", "threading",
+    "asyncio", "importlib", "builtins",
+}
+_BLOCKED_ATTRS = {
+    "system", "popen", "run", "Popen", "call", "check_output", "check_call",
+    "urlopen", "request", "get", "post", "put", "delete", "patch", "connect",
+    "remove", "unlink", "rmdir", "rmtree", "rename", "replace",
+}
+_SAFE_BUILTINS = {
+    "abs": abs,
+    "all": all,
+    "any": any,
+    "bool": bool,
+    "dict": dict,
+    "enumerate": enumerate,
+    "float": float,
+    "int": int,
+    "len": len,
+    "list": list,
+    "max": max,
+    "min": min,
+    "print": print,
+    "range": range,
+    "round": round,
+    "set": set,
+    "str": str,
+    "sum": sum,
+    "tuple": tuple,
+    "zip": zip,
+    "Exception": Exception,
+    "ValueError": ValueError,
+}
+
+
+def _client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for", "").strip()
+    if xff:
+        return xff.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _allow_request(bucket: dict, key: str, limit: int, window_seconds: int) -> bool:
+    now = time.time()
+    cutoff = now - window_seconds
+    with _STATE_LOCK:
+        q = bucket[key]
+        while q and q[0] < cutoff:
+            q.popleft()
+        if len(q) >= limit:
+            return False
+        q.append(now)
+        return True
+
+
+@contextmanager
+def _acquire_run_slot():
+    global _ACTIVE_RUNS, _QUEUED_RUNS
+    joined_queue = False
+
+    with _STATE_LOCK:
+        if _ACTIVE_RUNS >= _MAX_CONCURRENT_RUNS:
+            if _QUEUED_RUNS >= _MAX_QUEUE_DEPTH:
+                raise HTTPException(status_code=429, detail={"error": "Server busy, please retry."})
+            _QUEUED_RUNS += 1
+            joined_queue = True
+
+    acquired = _RUN_SLOT_SEMAPHORE.acquire(timeout=_QUEUE_WAIT_SECONDS if joined_queue else 1)
+
+    if joined_queue:
+        with _STATE_LOCK:
+            _QUEUED_RUNS = max(0, _QUEUED_RUNS - 1)
+
+    if not acquired:
+        raise HTTPException(status_code=429, detail={"error": "Server busy, please retry."})
+
+    with _STATE_LOCK:
+        _ACTIVE_RUNS += 1
+
+    try:
+        yield
+    finally:
+        with _STATE_LOCK:
+            _ACTIVE_RUNS = max(0, _ACTIVE_RUNS - 1)
+        _RUN_SLOT_SEMAPHORE.release()
+
+
+def _strip_build123d_imports(code: str) -> str:
+    lines = []
+    for line in code.splitlines():
+        if line.strip() == "from build123d import *":
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip() + "\n"
+
+
+def _validate_generated_code(code: str) -> tuple[bool, str | None]:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as exc:
+        return False, f"SyntaxError: {exc}"
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return False, "Import statements are not allowed in generated code."
+        if isinstance(node, ast.Name) and (node.id in _BLOCKED_NAMES or node.id.startswith("__")):
+            return False, f"Blocked identifier: {node.id}"
+        if isinstance(node, ast.Attribute) and node.attr in _BLOCKED_ATTRS:
+            return False, f"Blocked attribute access: {node.attr}"
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in _BLOCKED_NAMES:
+                return False, f"Blocked function call: {node.func.id}"
+            if isinstance(node.func, ast.Attribute) and node.func.attr in _BLOCKED_ATTRS:
+                return False, f"Blocked function call: {node.func.attr}"
+
+    return True, None
+
+
+def _exec_with_timeout(code: str, script_path: Path, exec_globals: dict) -> None:
+    timeout_seconds = max(1, int(os.environ.get("NATURALCAD_EXEC_TIMEOUT_SECONDS", "20")))
+
+    # SIGALRM only works on the main thread. Modal may invoke this handler on
+    # a worker thread, so fall back to direct exec in that case.
+    if threading.current_thread() is not threading.main_thread():
+        exec(compile(code, str(script_path), "exec"), exec_globals)
+        return
+
+    def _timeout_handler(signum, frame):
+        raise TimeoutError(f"Execution exceeded {timeout_seconds}s")
+
+    old_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(timeout_seconds)
+    try:
+        exec(compile(code, str(script_path), "exec"), exec_globals)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 class GenerateRequest(BaseModel):
@@ -74,8 +239,11 @@ class GenerateRequest(BaseModel):
             raise ValueError(f"mode must be one of {sorted(_VALID_MODES)}")
         if self.output_type not in _VALID_OUTPUTS:
             raise ValueError(f"output_type must be one of {sorted(_VALID_OUTPUTS)}")
-        if not self.prompt.strip():
+        prompt_text = self.prompt.strip()
+        if not prompt_text:
             raise ValueError("prompt must not be empty")
+        if len(prompt_text) > _MAX_PROMPT_CHARS:
+            raise ValueError(f"prompt too long (max {_MAX_PROMPT_CHARS} chars)")
         return self
 
 
@@ -163,7 +331,7 @@ def _log_job_to_supabase(
     gpu="T4",
     timeout=300,
     secrets=[
-        modal.Secret.from_name("huggingface-secret"),
+        modal.Secret.from_name("openrouter-secret"),
         modal.Secret.from_name("supabase-secret"),
         modal.Secret.from_name("naturalcad-api-key"),
     ],
@@ -174,9 +342,18 @@ def generate_cad_endpoint(payload: dict, request: Request):
 
     # Auth
     expected_key = os.environ.get("NATURALCAD_API_KEY")
-    provided_key = request.headers.get("x-api-key")
-    if expected_key and provided_key != expected_key:
+    if not expected_key:
+        raise HTTPException(status_code=503, detail={"error": "Service auth is not configured."})
+
+    provided_key = request.headers.get("x-api-key", "")
+    if not provided_key or not secrets.compare_digest(provided_key, expected_key):
         raise HTTPException(status_code=401, detail={"error": "Unauthorized"})
+
+    client_ip = _client_ip(request)
+    if not _allow_request(_REQUESTS_BY_IP, client_ip, _RATE_LIMIT_PER_IP, _RATE_WINDOW_SECONDS):
+        raise HTTPException(status_code=429, detail={"error": "Rate limit exceeded for IP."})
+    if not _allow_request(_REQUESTS_BY_KEY, provided_key, _RATE_LIMIT_PER_KEY, _RATE_WINDOW_SECONDS):
+        raise HTTPException(status_code=429, detail={"error": "Rate limit exceeded for API key."})
 
     # Validate and normalise
     try:
@@ -184,7 +361,8 @@ def generate_cad_endpoint(payload: dict, request: Request):
     except Exception as exc:
         raise HTTPException(status_code=400, detail={"error": str(exc)})
 
-    return generate_cad.local(req.prompt, req.mode, req.output_type)
+    with _acquire_run_slot():
+        return generate_cad.local(req.prompt, req.mode, req.output_type)
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +534,7 @@ result = p.part
     gpu="T4",
     timeout=300,
     secrets=[
-        modal.Secret.from_name("huggingface-secret"),
+        modal.Secret.from_name("openrouter-secret"),
         modal.Secret.from_name("supabase-secret"),
     ],
 )
@@ -368,13 +546,13 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
     """
     import os
     import uuid
-    from huggingface_hub import InferenceClient
 
-    hf_token = os.environ.get("HF_TOKEN")
-    if not hf_token:
-        return {"error": "HF_TOKEN not found in environment secrets"}
+    openrouter_api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not openrouter_api_key:
+        return {"error": "OPENROUTER_API_KEY not found in environment secrets"}
 
-    client = InferenceClient(model="Qwen/Qwen2.5-Coder-32B-Instruct", token=hf_token)
+    openrouter_api_url = os.environ.get("OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions")
+    openrouter_model = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-opus-4.7")
 
     mode_hint = _MODE_HINTS.get(mode, _MODE_HINTS["part"])
     output_rule = _OUTPUT_RULES.get(output_type, _OUTPUT_RULES["3d_solid"])
@@ -400,12 +578,36 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
     for attempt in range(max_attempts):
         print(f"LLM call {attempt + 1}/{max_attempts} | mode={mode} output_type={output_type}")
         try:
-            response = client.chat.completions.create(
-                messages=messages,
-                max_tokens=2048,  # 1024 could truncate assemblies or multi-step parts
-                temperature=0.2,
-            )
-            generated_code = response.choices[0].message.content.strip()
+            headers = {
+                "Authorization": f"Bearer {openrouter_api_key}",
+                "Content-Type": "application/json",
+            }
+            referer = os.environ.get("OPENROUTER_REFERER", "")
+            title = os.environ.get("OPENROUTER_TITLE", "NaturalCAD")
+            if referer:
+                headers["HTTP-Referer"] = referer
+            if title:
+                headers["X-Title"] = title
+
+            payload = {
+                "model": openrouter_model,
+                "messages": messages,
+                "max_tokens": 2048,  # 1024 could truncate assemblies or multi-step parts
+                "temperature": 0.2,
+            }
+
+            with httpx.Client(timeout=120.0) as client:
+                response = client.post(openrouter_api_url, headers=headers, json=payload)
+
+            if response.status_code >= 400:
+                print(f"OpenRouter error {response.status_code}: {response.text[:500]}")
+                return {"error": f"LLM provider unavailable ({response.status_code}). Please retry."}
+
+            data = response.json()
+            generated_code = (data.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+            if not generated_code:
+                print(f"OpenRouter empty content response: {str(data)[:500]}")
+                return {"error": "LLM returned empty output. Please retry."}
 
             # Strip markdown fences (model sometimes ignores rule 1)
             if generated_code.startswith("```python"):
@@ -416,7 +618,8 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
                 generated_code = generated_code[:-3]
             generated_code = generated_code.strip()
         except Exception as e:
-            return {"error": f"LLM call failed: {e}"}
+            print(f"LLM call failed: {e}")
+            return {"error": "LLM call failed. Please retry."}
 
         print(f"Generated code:\n{generated_code}")
 
@@ -424,13 +627,35 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             script_path = Path(tmpdir) / "script.py"
-            script_path.write_text(generated_code)
+            sanitized_code = _strip_build123d_imports(generated_code)
+            script_path.write_text(sanitized_code)
 
-            exec_globals = {}
+            is_safe, safety_error = _validate_generated_code(sanitized_code)
+            if not is_safe:
+                err_short = f"Rejected by AST guard: {safety_error}"
+                print(err_short)
+                if attempt < max_attempts - 1:
+                    messages.append({"role": "assistant", "content": generated_code})
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"That code was blocked by safety guard ({safety_error}).\n"
+                            "Return a safe build123d-only script with no imports and no filesystem/network/system calls."
+                        ),
+                    })
+                    continue
+                _log_job_to_supabase(run_id, prompt, mode, output_type, generated_code, "failed", err_short)
+                return {"error": "Generated code was unsafe and was blocked."}
+
+            exec_globals = {"__builtins__": _SAFE_BUILTINS.copy()}
+            import build123d as _b3d
+            for _name in dir(_b3d):
+                if not _name.startswith("_"):
+                    exec_globals[_name] = getattr(_b3d, _name)
 
             # Scrub secrets before exec so generated code cannot read them
             original_env = os.environ.copy()
-            os.environ.pop("HF_TOKEN", None)
+            os.environ.pop("OPENROUTER_API_KEY", None)
             os.environ.pop("SUPABASE_URL", None)
             os.environ.pop("SUPABASE_SERVICE_ROLE_KEY", None)
             os.environ.pop("NATURALCAD_API_KEY", None)
@@ -439,7 +664,7 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
             err_short = ""
             err_trace = ""
             try:
-                exec(compile(generated_code, str(script_path), "exec"), exec_globals)
+                _exec_with_timeout(sanitized_code, script_path, exec_globals)
                 exec_success = True
             except Exception as e:
                 import traceback as _tb
@@ -473,7 +698,10 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
                     continue
                 else:
                     _log_job_to_supabase(run_id, prompt, mode, output_type, generated_code, "failed", err_short)
-                    return {"error": err_short, "code": generated_code}
+                    return {
+                        "error": "Generation failed during CAD execution. Please refine your prompt and retry.",
+                        "code": generated_code,
+                    }
 
             # ----------------------------------------------------------------
             # Export: STL, STEP, GLB
@@ -525,7 +753,7 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
             for fmt, file_path, content_type in file_pairs:
                 if not file_path or not file_path.exists():
                     continue
-                storage_key = f"runs/{run_id[:8]}/model.{fmt}"
+                storage_key = f"runs/{run_id}/model.{fmt}"
                 file_bytes = file_path.read_bytes()
                 print(f"Uploading {fmt}: {len(file_bytes)} bytes")
                 try:
@@ -537,6 +765,7 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
             return {
                 "job_id": run_id,
                 "success": True,
+                "model": openrouter_model,
                 "urls": urls,
                 "prompt": prompt,
                 "generated_code": generated_code,

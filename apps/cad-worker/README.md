@@ -27,23 +27,23 @@ modal deploy main
 
 ## Environment Variables Needed
 
-Create a `.env` file:
+Set these as Modal secrets/env vars:
+
 ```
-OPENAI_API_KEY=sk-...  # If using OpenAI
-# Or other LLM key
+OPENROUTER_API_KEY=sk-or-...
+OPENROUTER_MODEL=openai/gpt-4o-mini  # or any OpenRouter model id you want
+OPENROUTER_API_URL=https://openrouter.ai/api/v1/chat/completions  # optional override
+OPENROUTER_REFERER=https://huggingface.co/spaces/noahtheboa/naturalcad  # optional
+OPENROUTER_TITLE=NaturalCAD  # optional
 ```
 
-## LLM Configuration
+Also required for uploads/logging:
 
-The current code has placeholder LLM logic. To wire up a real model:
-
-1. **Option A: OpenAI** (easiest)
-   - Add `openai` to requirements.txt
-   - Set `OPENAI_API_KEY`
-   
-2. **Option B: Modal-hosted model**
-   - Reference the model in Modal's model registry
-   - Configure in the function
+```
+SUPABASE_URL=...
+SUPABASE_SERVICE_ROLE_KEY=...
+SUPABASE_BUCKET=naturalCAD-artifacts
+```
 
 ## Architecture
 
