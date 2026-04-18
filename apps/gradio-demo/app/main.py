@@ -435,7 +435,7 @@ export_step(shape, r"{step_file}")
 # Make GLB preview
 mesh = load_mesh(str(stl_file), force="mesh")
 mesh.apply_transform([
-    [1,0,0,0], [0,0,1,0], [0,-1,0,0], [0,0,0,1]], False)
+    [1,0,0,0], [0,0,1,0], [0,-1,0,0], [0,0,0,1]])
 mesh.export(str(glb_file))
 '''
         runner_file = Path(tmpdir) / "_runner.py"
@@ -571,7 +571,7 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                             [0, 0, 1, 0],
                             [0, -1, 0, 0],
                             [0, 0, 0, 1],
-                        ], False)
+                        ])
                         glb_path = run_dir / f"{run_id}.glb"
                         mesh.export(str(glb_path))
                         glb_file = str(glb_path)
