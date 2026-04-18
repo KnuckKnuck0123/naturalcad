@@ -553,6 +553,8 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
 
     openrouter_api_url = os.environ.get("OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions")
     openrouter_model = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-opus-4.7")
+    log_generated_code = os.environ.get("NATURALCAD_LOG_CODE", "false").strip().lower() in {"1", "true", "yes", "on"}
+    include_code_in_response = os.environ.get("NATURALCAD_INCLUDE_CODE_IN_RESPONSE", "false").strip().lower() in {"1", "true", "yes", "on"}
 
     mode_hint = _MODE_HINTS.get(mode, _MODE_HINTS["part"])
     output_rule = _OUTPUT_RULES.get(output_type, _OUTPUT_RULES["3d_solid"])
@@ -621,7 +623,8 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
             print(f"LLM call failed: {e}")
             return {"error": "LLM call failed. Please retry."}
 
-        print(f"Generated code:\n{generated_code}")
+        if log_generated_code:
+            print(f"Generated code:\n{generated_code}")
 
         from build123d import export_stl, export_step
 
@@ -768,7 +771,7 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
                 "model": openrouter_model,
                 "urls": urls,
                 "prompt": prompt,
-                "generated_code": generated_code,
+                "generated_code": generated_code if include_code_in_response else "",
             }
 
 

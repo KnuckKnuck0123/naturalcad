@@ -35,6 +35,8 @@ OPENROUTER_MODEL=openai/gpt-4o-mini  # or any OpenRouter model id you want
 OPENROUTER_API_URL=https://openrouter.ai/api/v1/chat/completions  # optional override
 OPENROUTER_REFERER=https://huggingface.co/spaces/noahtheboa/naturalcad  # optional
 OPENROUTER_TITLE=NaturalCAD  # optional
+NATURALCAD_LOG_CODE=false  # optional, default false
+NATURALCAD_INCLUDE_CODE_IN_RESPONSE=false  # optional, default false
 ```
 
 Also required for uploads/logging:
