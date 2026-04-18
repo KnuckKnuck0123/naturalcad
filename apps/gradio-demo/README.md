@@ -65,6 +65,7 @@ Optional environment variables:
 - `NATURALCAD_BACKEND_URL` (leave unset for a pure Space-only MVP, or set it to enable backend-assisted spec generation + artifact upload)
 - `NATURALCAD_API_KEY`
 - `NATURALCAD_BACKEND_TIMEOUT` (default `4` seconds)
+- `NATURALCAD_SHOW_CODE` (default `false`; set `true` to show generated build123d code in UI logs)
 - `BUILD123D_PYTHON` (defaults to the current Python runtime, which is better for Hugging Face Space deployment)
 
 When backend is enabled and returns a `job.id`, the app will POST STL/STEP files to:
