@@ -12,11 +12,17 @@ This API is the foundation for domain app features while keeping the Hugging Fac
 
 ## Current storage mode
 - In-memory repository (for fast iteration)
-- Next step: replace repo with Supabase-backed repository
+- Supabase migration scaffold added: `supabase/migrations/20260424_000001_domain_v1.sql`
+- Next step: wire repository methods to Supabase tables
 
 ## Local run
 ```bash
 npm run backend:local
+```
+
+## DB bootstrap (next)
+```bash
+supabase db push
 ```
 
 ## Required headers
