@@ -20,7 +20,11 @@ class Settings:
     cad_worker_url: str = os.getenv("NATURALCAD_CAD_WORKER_URL", "").strip()
     cad_worker_api_key: str = os.getenv("NATURALCAD_CAD_WORKER_API_KEY", "").strip()
 
-    # Guest rate limits (simple in-memory MVP guardrails)
+    # Supabase persistence (optional, falls back to in-memory when unset)
+    supabase_url: str = os.getenv("SUPABASE_URL", "").strip()
+    supabase_service_role_key: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+
+    # Guest rate limits
     rate_window_seconds: int = int(os.getenv("NATURALCAD_RATE_WINDOW_SECONDS", "3600"))
     guest_runs_per_window: int = int(os.getenv("NATURALCAD_GUEST_RUNS_PER_WINDOW", "5"))
     signed_runs_per_window: int = int(os.getenv("NATURALCAD_SIGNED_RUNS_PER_WINDOW", "30"))

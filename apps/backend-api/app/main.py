@@ -19,9 +19,13 @@ from .models import (
     VersionResponse,
 )
 from .repository import InMemoryRepo, extract_slider_controls
+from .repository_supabase import SupabaseRepo
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
-repo = InMemoryRepo()
+if settings.supabase_url and settings.supabase_service_role_key:
+    repo = SupabaseRepo(url=settings.supabase_url, service_role_key=settings.supabase_service_role_key)
+else:
+    repo = InMemoryRepo()
 
 MODEL_PROFILES: dict[str, ModelProfile] = {
     "fast": ModelProfile(

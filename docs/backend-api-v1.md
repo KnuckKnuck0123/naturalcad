@@ -11,9 +11,9 @@ This API is the foundation for domain app features while keeping the Hugging Fac
 - Project detail + version history (`GET /v1/projects/{id}`)
 
 ## Current storage mode
-- In-memory repository (for fast iteration)
-- Supabase migration scaffold added: `supabase/migrations/20260424_000001_domain_v1.sql`
-- Next step: wire repository methods to Supabase tables
+- DB-backed repository is now wired when `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` are set.
+- Automatic fallback to in-memory repository when Supabase env vars are unset.
+- Supabase migration scaffold: `supabase/migrations/20260424_000001_domain_v1.sql`
 
 ## Local run
 ```bash
