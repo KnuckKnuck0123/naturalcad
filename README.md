@@ -11,7 +11,7 @@ pinned: false
 # NaturalCAD
 
 <p align="center">
-  <img src="docs/assets/naturalcad-icon-selected.jpg" alt="NaturalCAD icon" width="220" />
+  <img src="docs/assets/naturalcad-logo-current.jpg" alt="NaturalCAD logo" width="220" />
 </p>
 
 **NaturalCAD** is a public prompt-to-CAD demo built around build123d.
