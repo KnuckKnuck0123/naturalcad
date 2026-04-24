@@ -16,10 +16,34 @@ pinned: false
 
 **NaturalCAD** is a public prompt-to-CAD demo built around build123d.
 
+## Open-source alpha (BYO APIs)
+
+This repo is open so anyone can run the alpha with their own API keys and backend endpoint.
+
+- Bring your own model/API keys
+- Run locally or self-host
+- Swap providers without changing the frontend UX
+
+If you just want the hosted demo, use the public Space below. If you want control, fork this repo and wire your own secrets.
+
 ## Use it
 
 - Try the public alpha app: https://huggingface.co/spaces/kNOWare/naturalcad
 - Use this repo if you want to run locally, self-host, or modify the stack
+
+Quick BYO setup:
+
+1. Run frontend locally:
+   ```bash
+   npm run frontend:local
+   ```
+2. Point it to your backend:
+   - `NATURALCAD_BACKEND_URL`
+3. If your backend is protected, set:
+   - `NATURALCAD_API_KEY`
+4. On the backend side, provide your own:
+   - `OPENROUTER_API_KEY` (or your chosen model provider key)
+   - Supabase credentials for storage/logging (optional but recommended)
 
 Current local preview posture:
 - browser preview uses GLB when available
