@@ -144,6 +144,7 @@ See `docs/github-push-safety.md` for the full branch and review policy.
 ## Key docs
 
 - `docs/sprint-v1-domain-app.md`
+- `docs/spec-3d-viewer-v1.md`
 - `docs/backend-api-v1.md`
 - `docs/hf-space-mvp.md`
 - `docs/hf-space-deploy-checklist.md`
