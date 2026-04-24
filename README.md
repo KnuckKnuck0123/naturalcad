@@ -64,6 +64,7 @@ Turn natural-language prompts into quick CAD studies, test the interaction with 
 
 ## Other repo areas
 
+- `apps/backend-api` - domain app control-plane API (sessions, projects, conversational versions, slider updates)
 - `apps/cad-worker` - Modal worker for LLM + build123d execution
 - `apps/web-visualizer` - earlier React/Vite prototype
 - `docs/` - product and deployment planning
@@ -143,6 +144,7 @@ See `docs/github-push-safety.md` for the full branch and review policy.
 ## Key docs
 
 - `docs/sprint-v1-domain-app.md`
+- `docs/backend-api-v1.md`
 - `docs/hf-space-mvp.md`
 - `docs/hf-space-deploy-checklist.md`
 - `docs/startup-shutdown-playbook.md`
