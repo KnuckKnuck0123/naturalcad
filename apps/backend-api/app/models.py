@@ -24,6 +24,10 @@ class GuestSessionRequest(BaseModel):
     device_id: str | None = Field(default=None, max_length=256)
 
 
+class AuthSessionRequest(BaseModel):
+    access_token: str = Field(min_length=20)
+
+
 class SessionResponse(BaseModel):
     session_id: str
     actor_type: ActorType

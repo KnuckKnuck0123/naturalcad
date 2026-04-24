@@ -4,6 +4,7 @@ This API is the foundation for domain app features while keeping the Hugging Fac
 
 ## What is implemented now
 - Guest session bootstrap (`POST /v1/auth/guest`)
+- Signed user session bootstrap from Supabase token (`POST /v1/auth/session`)
 - Model profiles for switcher (`GET /v1/models`)
 - Project creation (`POST /v1/projects`)
 - Conversational generation scaffold (`POST /v1/projects/{id}/generate`)
@@ -29,6 +30,10 @@ supabase db push
 ## Required headers
 - `x-api-key`: optional when `API_SHARED_SECRET` is empty
 - `x-session-id`: required for project and generation routes
+
+## Auth notes
+- `POST /v1/auth/session` expects a Supabase access token and returns a NaturalCAD session id.
+- This enables non-Google account paths (email/password and magic-link).
 
 ## Generation behavior
 - If `NATURALCAD_CAD_WORKER_URL` is set, API forwards generation requests to the Modal CAD worker.

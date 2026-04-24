@@ -50,6 +50,50 @@ class SupabaseRepo:
             quotas={"runs_per_window": runs_per_window},
         )
 
+    def create_user_session(self, user_id: str, runs_per_window: int) -> SessionResponse:
+        select_params = {
+            "select": "id,created_at",
+            "actor_type": "eq.user",
+            "user_id": f"eq.{user_id}",
+            "order": "created_at.asc",
+            "limit": "1",
+        }
+        with httpx.Client(timeout=20.0) as client:
+            select_resp = client.get(f"{self.base}/nc_sessions", params=select_params, headers=self._headers())
+        select_resp.raise_for_status()
+        rows = select_resp.json()
+        if rows:
+            row = rows[0]
+            return SessionResponse(
+                session_id=row["id"],
+                actor_type="user",
+                created_at=self._parse_iso(row["created_at"]),
+                quotas={"runs_per_window": runs_per_window},
+            )
+
+        session_id = f"user_{uuid.uuid4().hex[:12]}"
+        now = utc_now()
+        insert_payload = {
+            "id": session_id,
+            "actor_type": "user",
+            "user_id": user_id,
+            "created_at": now.isoformat(),
+        }
+        with httpx.Client(timeout=20.0) as client:
+            insert_resp = client.post(
+                f"{self.base}/nc_sessions",
+                json=insert_payload,
+                headers=self._headers(prefer="return=representation"),
+            )
+        insert_resp.raise_for_status()
+
+        return SessionResponse(
+            session_id=session_id,
+            actor_type="user",
+            created_at=now,
+            quotas={"runs_per_window": runs_per_window},
+        )
+
     def get_session(self, session_id: str) -> SessionResponse | None:
         params = {
             "select": "id,actor_type,user_id,created_at",

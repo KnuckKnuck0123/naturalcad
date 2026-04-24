@@ -7,6 +7,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 
 from .config import settings
 from .models import (
+    AuthSessionRequest,
     CreateProjectRequest,
     GenerateRequest,
     GuestSessionRequest,
@@ -74,6 +75,27 @@ def _assert_project_access(project: ProjectResponse, session: SessionResponse) -
         raise HTTPException(status_code=403, detail={"error": "Project access denied"})
 
 
+async def _resolve_user_id_from_token(access_token: str) -> str:
+    if not settings.supabase_url or not settings.supabase_service_role_key:
+        raise HTTPException(status_code=503, detail={"error": "Supabase auth is not configured"})
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "apikey": settings.supabase_service_role_key,
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(f"{settings.supabase_url.rstrip('/')}/auth/v1/user", headers=headers)
+
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=401, detail={"error": "Invalid access token"})
+
+    data = resp.json()
+    user_id = data.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail={"error": "Unable to resolve user"})
+    return user_id
+
+
 async def _call_cad_worker(prompt: str, mode: str, output_type: str, image_urls: list[str] | None = None) -> dict[str, Any]:
     if not settings.cad_worker_url:
         return {
@@ -117,6 +139,16 @@ def create_guest_session(
 ) -> SessionResponse:
     _validate_gateway_secret(x_api_key)
     return repo.create_guest_session(settings.guest_runs_per_window)
+
+
+@app.post("/v1/auth/session", response_model=SessionResponse)
+async def create_user_session(
+    payload: AuthSessionRequest,
+    x_api_key: str | None = Header(default=None),
+) -> SessionResponse:
+    _validate_gateway_secret(x_api_key)
+    user_id = await _resolve_user_id_from_token(payload.access_token)
+    return repo.create_user_session(user_id, settings.signed_runs_per_window)
 
 
 @app.get("/v1/models", response_model=list[ModelProfile])

@@ -23,6 +23,7 @@ class QuotaState:
 class InMemoryRepo:
     def __init__(self) -> None:
         self.sessions: dict[str, SessionResponse] = {}
+        self.user_sessions: dict[str, str] = {}
         self.projects: dict[str, ProjectResponse] = {}
         self.project_versions: defaultdict[str, list[VersionResponse]] = defaultdict(list)
         self.quotas: dict[str, QuotaState] = {}
@@ -35,6 +36,22 @@ class InMemoryRepo:
             quotas={"runs_per_window": runs_per_window},
         )
         self.sessions[session.session_id] = session
+        self.quotas[session.session_id] = QuotaState(bucket=deque())
+        return session
+
+    def create_user_session(self, user_id: str, runs_per_window: int) -> SessionResponse:
+        session_id = self.user_sessions.get(user_id)
+        if session_id and session_id in self.sessions:
+            return self.sessions[session_id]
+
+        session = SessionResponse(
+            session_id=f"user_{user_id[:8]}_{uuid.uuid4().hex[:6]}",
+            actor_type="user",
+            created_at=utc_now(),
+            quotas={"runs_per_window": runs_per_window},
+        )
+        self.sessions[session.session_id] = session
+        self.user_sessions[user_id] = session.session_id
         self.quotas[session.session_id] = QuotaState(bucket=deque())
         return session
 
