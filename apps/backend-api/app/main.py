@@ -74,7 +74,7 @@ def _assert_project_access(project: ProjectResponse, session: SessionResponse) -
         raise HTTPException(status_code=403, detail={"error": "Project access denied"})
 
 
-async def _call_cad_worker(prompt: str, mode: str, output_type: str) -> dict[str, Any]:
+async def _call_cad_worker(prompt: str, mode: str, output_type: str, image_urls: list[str] | None = None) -> dict[str, Any]:
     if not settings.cad_worker_url:
         return {
             "success": True,
@@ -92,6 +92,8 @@ async def _call_cad_worker(prompt: str, mode: str, output_type: str) -> dict[str
         "mode": mode,
         "output_type": output_type,
     }
+    if image_urls:
+        payload["image_urls"] = image_urls
 
     async with httpx.AsyncClient(timeout=180) as client:
         resp = await client.post(settings.cad_worker_url, json=payload, headers=headers)
@@ -195,7 +197,11 @@ async def generate_version(
             f"User refinement: {payload.prompt}"
         )
 
-    worker = await _call_cad_worker(final_prompt, project.mode, project.output_type)
+    if payload.image_urls:
+        ref_block = "\n".join(f"- {u}" for u in payload.image_urls)
+        final_prompt = f"{final_prompt}\n\nReference images:\n{ref_block}"
+
+    worker = await _call_cad_worker(final_prompt, project.mode, project.output_type, payload.image_urls)
     success = bool(worker.get("success")) and not worker.get("error")
 
     return repo.create_version(

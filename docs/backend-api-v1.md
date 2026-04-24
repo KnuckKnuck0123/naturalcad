@@ -7,6 +7,7 @@ This API is the foundation for domain app features while keeping the Hugging Fac
 - Model profiles for switcher (`GET /v1/models`)
 - Project creation (`POST /v1/projects`)
 - Conversational generation scaffold (`POST /v1/projects/{id}/generate`)
+  - supports optional `image_urls` references for guided generations
 - Param slider patch flow (`PATCH /v1/projects/{id}/versions/{version_id}/parameters`)
 - Project detail + version history (`GET /v1/projects/{id}`)
 
