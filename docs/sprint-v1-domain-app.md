@@ -102,6 +102,12 @@ Ship a domain-based NaturalCAD app that beats CADAM on core value:
 - Request timeout + cancellation
 - Usage logging per job (model, tokens if available, latency, outcome)
 
+## Branch Safety (do not break alpha)
+- `main` = domain app development
+- `huggingface` = alpha demo stability
+- No feature migrations from `main` to `huggingface` unless explicitly marked alpha-safe
+- `huggingface` only receives bugfixes/hotfixes needed to keep the public alpha stable
+
 ## Success Criteria (v1)
 - User can generate one-shot CAD and export STEP.
 - User can continue conversation to refine prior versions.
