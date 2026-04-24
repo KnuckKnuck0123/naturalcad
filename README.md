@@ -16,6 +16,11 @@ pinned: false
 
 **NaturalCAD** is a public prompt-to-CAD demo built around build123d.
 
+## Use it
+
+- Try the public alpha app: https://huggingface.co/spaces/kNOWare/naturalcad
+- Use this repo if you want to run locally, self-host, or modify the stack
+
 Current local preview posture:
 - browser preview uses GLB when available
 - STEP remains the main CAD handoff artifact
@@ -62,7 +67,7 @@ That uses the repo helper scripts:
 
 Notes:
 - frontend local dev needs Python 3.10-3.13 because `build123d` does not currently publish wheels for Python 3.14+
-- by default the frontend helper uses `~/.openclaw/workspace/.venvs/cadrender312`
+- the frontend helper expects a working Python venv; default path is `~/.openclaw/workspace/.venvs/cadrender312`
 - for hosted testing, set `NATURALCAD_BACKEND_URL` to the Modal endpoint
 - if `NATURALCAD_BACKEND_URL` is unset, the helper defaults to `http://127.0.0.1:8010`
 - if `apps/backend-api/.env` exists, the frontend helper also reuses `API_SHARED_SECRET` as `NATURALCAD_API_KEY`

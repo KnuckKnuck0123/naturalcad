@@ -335,6 +335,11 @@ def create_job(prompt: str, mode: str, output_type: str) -> tuple[dict | None, s
             return data, json.dumps(data, indent=2)
     except error.HTTPError as exc:
         detail = exc.read().decode() if exc.fp else str(exc)
+        if exc.code == 429:
+            return None, json.dumps({
+                "error": "Server busy, please try again in a moment.",
+                "detail": "The service is under load. Wait a few seconds before retrying.",
+            }, indent=2)
         return None, json.dumps({"error": f"backend http {exc.code}", "detail": detail}, indent=2)
     except error.URLError as exc:
         if isinstance(exc.reason, TimeoutError) or "timed out" in str(exc.reason).lower():
@@ -533,7 +538,14 @@ def generate_from_prompt(prompt: str, mode: str, output_type: str):
                 result = json.loads(response.read().decode())
 
                 if "error" in result:
-                    return None, None, None, None, f"Error from backend:\n{result['error']}", "Backend generation failed."
+                    err_msg = result["error"]
+                    detail = result.get("detail", "")
+                    friendly = err_msg
+                    if "busy" in err_msg.lower() or "429" in err_msg:
+                        friendly = "⚠️ Server busy — please wait a moment and try again."
+                    elif detail:
+                        friendly = f"{err_msg}\n{detail}"
+                    return None, None, None, None, f"Error from backend:\n{friendly}", "Generation failed — try again."
 
                 urls = result.get("urls", {})
                 code = result.get("generated_code", "")
@@ -701,7 +713,8 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title="NaturalCAD", theme=gr.themes.Base()) as demo:
         gr.Markdown(
             "# NaturalCAD\n"
-            "Turn a natural-language prompt into a downloadable CAD result."
+            "⚠️ **Alpha Demo — We're testing the service under load.**\n"
+            "*If the service is busy, please wait a moment and try again.*"
         )
         gr.Markdown(
             "**Best for demo:** one-shot parts, frames, blocks, canopies, and simple profiles."
