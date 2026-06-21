@@ -14,43 +14,25 @@ pinned: false
   <img src="docs/assets/naturalcad-logo-current.jpg" alt="NaturalCAD logo" width="220" />
 </p>
 
-**NaturalCAD** is a public prompt-to-CAD demo built around build123d.
+**NaturalCAD** is a conversational CAD product built around build123d, with the main product lane now centered on the website frontend in `apps/web`.
 
-## Open-source alpha (BYO APIs)
-
-This repo is open so anyone can run the alpha with their own API keys and backend endpoint.
-
-- Bring your own model/API keys
-- Run locally or self-host
-- Swap providers without changing the frontend UX
-
-If you just want the hosted demo, use the public Space below. If you want control, fork this repo and wire your own secrets.
+The current product direction is:
+- a hosted web app with a simple loop: prompt, generate, iterate, export
+- a broad text-to-CAD entry point
+- growing toward stronger replacement-part reconstruction and fit-driven refinement
 
 ## Use it
 
-- Try the public alpha app: https://huggingface.co/spaces/kNOWare/naturalcad
-- Use this repo if you want to run locally, self-host, or modify the stack
+- Main website/app frontend lives in `apps/web`
+- Legacy public Hugging Face demo still exists at: https://huggingface.co/spaces/kNOWare/naturalcad
+- Use this repo if you want to run locally, self-host, or continue product development
 
-Quick BYO setup:
-
-1. Run frontend locally:
-   ```bash
-   npm run frontend:local
-   ```
-2. Point it to your backend:
-   - `NATURALCAD_BACKEND_URL`
-3. If your backend is protected, set:
-   - `NATURALCAD_API_KEY`
-4. On the backend side, provide your own:
-   - `OPENROUTER_API_KEY` (or your chosen model provider key)
-   - Supabase credentials for storage/logging (optional but recommended)
-
-Current local preview posture:
+Current output posture:
 - browser preview uses GLB when available
 - STEP remains the main CAD handoff artifact
 - STL remains available as a mesh export
 
-Turn natural-language prompts into quick CAD studies, test the interaction with real users, and learn what deserves to become a bigger product.
+NaturalCAD is still early, but the real work is no longer just a text-to-CAD toy. The product is being shaped toward useful multi-turn CAD generation and, over time, replacement-part reconstruction.
 
 <p align="center">
   <img src="docs/assets/naturalcad-hero-reference.jpg" alt="NaturalCAD example output" width="680" />
@@ -58,36 +40,55 @@ Turn natural-language prompts into quick CAD studies, test the interaction with 
 
 ## Current app path
 
+- `apps/web` - main website + app frontend for the hosted product lane
+- `apps/backend-api` - control-plane API for sessions, projects, versions, and iteration
+- `apps/cad-worker` - CAD execution worker for LLM + build123d generation
+
+Legacy / older lanes still in the repo:
 - `app.py` - Hugging Face Space entrypoint
-- `requirements.txt` - Space runtime dependencies
-- `apps/gradio-demo` - primary MVP app
-
-## Other repo areas
-
-- `apps/backend-api` - domain app control-plane API (sessions, projects, conversational versions, slider updates)
-- `apps/cad-worker` - Modal worker for LLM + build123d execution
-- `apps/web` - real website + app frontend for the hosted product lane
+- `apps/gradio-demo` - older demo-first UI lane
 - `apps/web-visualizer` - earlier React/Vite prototype
-- `docs/` - product and deployment planning
-- `archive/` - older or superseded material kept for reference (includes legacy backend)
+- `archive/` - older or superseded material kept for reference
 
 ## Local run
 
-Simplest path:
+### Website/frontend lane
+
+1. Verify the website app builds:
+   ```bash
+   npm run web:typecheck
+   npm run web:build
+   ```
+2. Run local website development:
+   ```bash
+   npm run web:dev
+   ```
+3. Point the frontend at the backend with:
+   - `NATURALCAD_BACKEND_URL`
+4. If the backend is protected, also set:
+   - `NATURALCAD_API_KEY`
+5. On the backend side, provide:
+   - `OPENROUTER_API_KEY`
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+   - `SUPABASE_BUCKET`
+   - `NATURALCAD_API_KEY`
+
+### Legacy Gradio demo lane
+
+If you need to run the older Hugging Face/demo-oriented app:
 
 ```bash
 npm run frontend:local
 ```
 
-That runs the Gradio app and points to `NATURALCAD_BACKEND_URL`.
-
-Optional local backend (legacy) for contract testing:
+Optional local backend contract test:
 
 ```bash
 npm run backend:local
 ```
 
-That uses the repo helper scripts:
+That uses the helper scripts:
 - `scripts/run-local-backend.sh`
 - `scripts/run-local-frontend.sh`
 
@@ -106,32 +107,30 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Website/frontend lane:
-
-```bash
-npm run web:typecheck
-npm run web:build
-```
-
 ## Deployment posture
 
-Right now the priority is a lean Hugging Face Space MVP with a separate hosted backend.
+The current deployment direction is:
+- Vercel for the website/frontend lane
+- Modal or equivalent hosted worker for CAD execution
+- Supabase for project/session/version data and artifact storage
+- Cloudflare in front of the public domain setup
 
 Current recommended shape:
-- Hugging Face Space = public UI + local preview/runtime
-- Modal worker = prompt validation, auth/rate-limit gates, OpenRouter inference, build123d execution
-- Supabase = Postgres + artifact storage
-- OpenRouter = swappable model provider layer
+- `apps/web` = public product frontend
+- backend API = session/project/version control plane
+- CAD worker = build123d generation and artifact production
+- Supabase = state + storage
+- OpenRouter or equivalent = model provider layer
 
-If the CAD dependency stack or runtime limits become painful, the frontend can stay on Hugging Face while execution moves further toward a worker/container architecture later.
+The Hugging Face app still exists as a legacy demo lane, but it is no longer the main product framing for this repo.
 
 ### Hosted env wiring
 
-Hugging Face Space:
-- variable: `NATURALCAD_BACKEND_URL`
-- secret: `NATURALCAD_API_KEY`
+Frontend:
+- `NATURALCAD_BACKEND_URL`
+- `NATURALCAD_API_KEY` if the backend is protected
 
-Backend:
+Backend / worker:
 - `OPENROUTER_API_KEY`
 - `OPENROUTER_MODEL` (optional, default set in worker)
 - `SUPABASE_URL`
@@ -151,13 +150,13 @@ See `docs/github-push-safety.md` for the full branch and review policy.
 
 ## Key docs
 
+- `docs/naturalcad-remaining-work.md`
 - `docs/sprint-v1-domain-app.md`
 - `docs/spec-3d-viewer-v1.md`
 - `docs/backend-api-v1.md`
-- `docs/hf-space-mvp.md`
-- `docs/hf-space-deploy-checklist.md`
 - `docs/startup-shutdown-playbook.md`
 - `docs/publish-checklist.md`
 - `docs/backend-v0.md`
 - `docs/security-policy-v0.md`
 - `docs/engine-assembly-milestone.md`
+
