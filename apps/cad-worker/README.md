@@ -32,6 +32,8 @@ Set these as Modal secrets/env vars:
 ```
 OPENROUTER_API_KEY=sk-or-...
 OPENROUTER_MODEL=openai/gpt-4o-mini  # or any OpenRouter model id you want
+NATURALCAD_SPEC_MODEL=google/gemini-2.5-pro  # vision-capable spec resolver
+NATURALCAD_CAD_MODEL=anthropic/claude-sonnet-4
 OPENROUTER_API_URL=https://openrouter.ai/api/v1/chat/completions  # optional override
 OPENROUTER_REFERER=https://huggingface.co/spaces/noahtheboa/naturalcad  # optional
 OPENROUTER_TITLE=NaturalCAD  # optional
@@ -53,11 +55,14 @@ SUPABASE_BUCKET=naturalCAD-artifacts
 ## Architecture
 
 ```
-User Prompt (HF Space)
-    → Modal Function
-    → LLM interprets
-    → build123d generates STL
-    → Returns STL to user
+Project message + sanitized references
+    → vision model resolves a validated spec
+    → CAD model generates build123d code from the spec
+    → no-secret Modal executor validates and runs code
+    → trusted publisher stores GLB/STL/STEP/DXF artifacts
 ```
+
+The executor has no attached OpenRouter or Supabase secrets and blocks network
+access. Reference-image text is explicitly treated as untrusted data.
 
 *Created 2026-04-12*

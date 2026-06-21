@@ -12,6 +12,7 @@ load_dotenv()
 class Settings:
     app_name: str = "NaturalCAD Domain API"
     app_version: str = "0.1.0"
+    environment: str = os.getenv("NATURALCAD_ENV", "development").strip().lower()
 
     # Optional shared gateway secret for frontend -> API
     api_shared_secret: str = os.getenv("API_SHARED_SECRET", "")
@@ -23,6 +24,10 @@ class Settings:
     # Supabase persistence (optional, falls back to in-memory when unset)
     supabase_url: str = os.getenv("SUPABASE_URL", "").strip()
     supabase_service_role_key: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    source_image_bucket: str = os.getenv("NATURALCAD_SOURCE_IMAGE_BUCKET", "naturalcad-source-images").strip()
+    allowed_origins: tuple[str, ...] = tuple(
+        origin.strip() for origin in os.getenv("NATURALCAD_ALLOWED_ORIGINS", "http://localhost:3000").split(",") if origin.strip()
+    )
 
     # Guest rate limits
     rate_window_seconds: int = int(os.getenv("NATURALCAD_RATE_WINDOW_SECONDS", "3600"))
@@ -32,6 +37,9 @@ class Settings:
     mode_fast_model: str = os.getenv("NATURALCAD_MODE_FAST", "openai/gpt-4o-mini")
     mode_balanced_model: str = os.getenv("NATURALCAD_MODE_BALANCED", "google/gemini-2.5-pro")
     mode_quality_model: str = os.getenv("NATURALCAD_MODE_QUALITY", "anthropic/claude-sonnet-4")
+    spec_model: str = os.getenv("NATURALCAD_SPEC_MODEL", "google/gemini-2.5-pro")
+    cad_model: str = os.getenv("NATURALCAD_CAD_MODEL", "anthropic/claude-sonnet-4")
+    max_guest_attachments: int = int(os.getenv("NATURALCAD_MAX_GUEST_ATTACHMENTS", "3"))
 
 
 settings = Settings()

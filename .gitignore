@@ -14,6 +14,7 @@ __pycache__/
 **/artifacts/logs/*.jsonl
 .env
 .env.*
+!**/.env.example
 .vite/
 **/.next/
 **/*.tsbuildinfo

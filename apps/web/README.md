@@ -15,21 +15,29 @@ Website/product frontend for the hosted NaturalCAD lane on `main`.
 
 ## Environment
 
-Copy `.env.example` to `.env.local` and fill in real values:
+Copy `.env.example` to `.env.local` and fill in server-only values:
 
-- `NEXT_PUBLIC_API_BASE_URL`
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `NATURALCAD_BACKEND_URL`
+- `NATURALCAD_API_KEY`
+
+Neither value is exposed to the browser. The Next.js BFF stores the guest
+session in an HttpOnly cookie and forwards authenticated requests to the API.
 
 ## Phase 1 contract
 
-Phase 1 is guest-first:
-- `POST /session/guest`
-- `POST /projects`
-- `POST /projects/:id/generate`
+Phase 1 is guest-first and iterative:
+- create a guest session and project
+- upload up to three sanitized reference images
+- start an asynchronous generation from any selected parent version
+- answer clarification questions and poll until a version is complete
 
 Prompt harvesting is required from the beginning.
-Heavy artifacts should not all be stored by default; STEP should be persisted on export request.
+Images guide generation but are not measurement-grade reconstruction. Guest
+source images expire after seven days.
+
+Schedule `POST /v1/internal/cleanup-attachments` with the gateway key at least
+daily. The endpoint is idempotent and removes expired quarantine and sanitized
+objects.
 
 ## Local run
 

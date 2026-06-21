@@ -197,6 +197,98 @@ body {
   justify-content: flex-end;
 }
 
+.action-row--split {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.file-input {
+  display: none;
+}
+
+.workspace-commandbar {
+  min-height: 32px;
+  padding: 7px 40px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  text-transform: uppercase;
+}
+
+.workspace-commandbar button,
+.version-row,
+.attachment-thumb,
+.attachment-remove {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.attachment-strip {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+  min-height: 0;
+}
+
+.attachment-item {
+  width: 82px;
+  position: relative;
+}
+
+.attachment-thumb {
+  width: 82px;
+  height: 82px;
+  border: 1px solid var(--line-strong);
+  overflow: hidden;
+  position: relative;
+}
+
+.attachment-thumb--selected {
+  border-color: #ffffff;
+}
+
+.attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.attachment-thumb span {
+  position: absolute;
+  inset: auto 0 0;
+  padding: 4px;
+  background: rgba(0, 0, 0, 0.8);
+  font-family: var(--font-mono);
+  font-size: 0.48rem;
+  text-transform: uppercase;
+}
+
+.attachment-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 22px;
+  height: 22px;
+  background: #000000;
+  border: 1px solid #333333;
+  z-index: 2;
+}
+
+.clarification-banner {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--warn);
+  color: var(--warn);
+  font-size: 0.72rem;
+}
+
 .button {
   padding: 14px 28px;
   border: 1px solid #222;
@@ -297,11 +389,40 @@ body {
 }
 
 .version-row {
+  width: 100%;
+  text-align: left;
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 24px 40px;
   border-bottom: 1px solid #080808;
+}
+
+.version-row--selected {
+  background: #0a0a0a;
+  box-shadow: inset 2px 0 #ffffff;
+}
+
+.version-empty,
+.viewer-empty {
+  padding: 24px 40px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+}
+
+.viewer-empty {
+  height: 100%;
+  display: grid;
+  place-items: center;
+}
+
+@media (max-width: 900px) {
+  .workspace-grid { grid-template-columns: 1fr; }
+  .workspace-sidebar { min-height: 720px; }
+  .panel-heading, .composer-shell { padding: 24px; }
+  .conversation-log { padding: 0 24px 24px; }
 }
 
 .version-row:hover {

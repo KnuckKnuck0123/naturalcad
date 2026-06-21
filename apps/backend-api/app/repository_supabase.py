@@ -1,297 +1,171 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import uuid
+from datetime import datetime, timedelta
+from typing import Any
 
 import httpx
 
-from .models import ParameterControl, ProjectResponse, SessionResponse, VersionResponse, utc_now
+from .models import (
+    AttachmentResponse, GenerationRunResponse, MessageResponse, ParameterControl, PartSpec,
+    ProjectResponse, SessionResponse, VersionResponse, utc_now,
+)
 
 
 class SupabaseRepo:
+    """PostgREST repository. All authorization is checked before these service-role calls."""
+
     def __init__(self, *, url: str, service_role_key: str) -> None:
         self.url = url.rstrip("/")
         self.key = service_role_key
         self.base = f"{self.url}/rest/v1"
 
-    def _headers(self, *, prefer: str | None = None) -> dict[str, str]:
-        headers = {
-            "apikey": self.key,
-            "Authorization": f"Bearer {self.key}",
-            "Content-Type": "application/json",
-        }
+    def _headers(self, prefer: str | None = None) -> dict[str, str]:
+        headers = {"apikey": self.key, "Authorization": f"Bearer {self.key}", "Content-Type": "application/json"}
         if prefer:
             headers["Prefer"] = prefer
         return headers
 
-    def _parse_iso(self, value: str) -> datetime:
+    def _request(self, method: str, table: str, *, params: dict | None = None, json: Any = None, prefer: str | None = None) -> Any:
+        with httpx.Client(timeout=20.0) as client:
+            response = client.request(method, f"{self.base}/{table}", params=params, json=json, headers=self._headers(prefer))
+        response.raise_for_status()
+        return response.json() if response.content else None
+
+    @staticmethod
+    def _dt(value: str) -> datetime:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
     def create_guest_session(self, runs_per_window: int) -> SessionResponse:
-        session_id = f"guest_{uuid.uuid4().hex[:12]}"
-        now = utc_now()
-        payload = {
-            "id": session_id,
-            "actor_type": "guest",
-            "created_at": now.isoformat(),
-        }
-        with httpx.Client(timeout=20.0) as client:
-            resp = client.post(
-                f"{self.base}/nc_sessions",
-                json=payload,
-                headers=self._headers(prefer="return=representation"),
-            )
-        resp.raise_for_status()
-
-        return SessionResponse(
-            session_id=session_id,
-            actor_type="guest",
-            created_at=now,
-            quotas={"runs_per_window": runs_per_window},
-        )
+        now, session_id = utc_now(), f"guest_{uuid.uuid4().hex}"
+        expires_at = now + timedelta(days=7)
+        self._request("POST", "nc_sessions", json={"id": session_id, "actor_type": "guest", "created_at": now.isoformat(), "expires_at": expires_at.isoformat()}, prefer="return=minimal")
+        return SessionResponse(session_id=session_id, actor_type="guest", created_at=now, expires_at=expires_at, quotas={"runs_per_window": runs_per_window})
 
     def create_user_session(self, user_id: str, runs_per_window: int) -> SessionResponse:
-        select_params = {
-            "select": "id,created_at",
-            "actor_type": "eq.user",
-            "user_id": f"eq.{user_id}",
-            "order": "created_at.asc",
-            "limit": "1",
-        }
-        with httpx.Client(timeout=20.0) as client:
-            select_resp = client.get(f"{self.base}/nc_sessions", params=select_params, headers=self._headers())
-        select_resp.raise_for_status()
-        rows = select_resp.json()
+        rows = self._request("GET", "nc_sessions", params={"select": "id,created_at,expires_at", "actor_type": "eq.user", "user_id": f"eq.{user_id}", "expires_at": f"gt.{utc_now().isoformat()}", "limit": "1"})
         if rows:
-            row = rows[0]
-            return SessionResponse(
-                session_id=row["id"],
-                actor_type="user",
-                created_at=self._parse_iso(row["created_at"]),
-                quotas={"runs_per_window": runs_per_window},
-            )
-
-        session_id = f"user_{uuid.uuid4().hex[:12]}"
-        now = utc_now()
-        insert_payload = {
-            "id": session_id,
-            "actor_type": "user",
-            "user_id": user_id,
-            "created_at": now.isoformat(),
-        }
-        with httpx.Client(timeout=20.0) as client:
-            insert_resp = client.post(
-                f"{self.base}/nc_sessions",
-                json=insert_payload,
-                headers=self._headers(prefer="return=representation"),
-            )
-        insert_resp.raise_for_status()
-
-        return SessionResponse(
-            session_id=session_id,
-            actor_type="user",
-            created_at=now,
-            quotas={"runs_per_window": runs_per_window},
-        )
+            return SessionResponse(session_id=rows[0]["id"], actor_type="user", created_at=self._dt(rows[0]["created_at"]), expires_at=self._dt(rows[0]["expires_at"]), quotas={"runs_per_window": runs_per_window})
+        now, session_id = utc_now(), f"user_{uuid.uuid4().hex}"
+        expires_at = now + timedelta(days=30)
+        self._request("POST", "nc_sessions", json={"id": session_id, "actor_type": "user", "user_id": user_id, "created_at": now.isoformat(), "expires_at": expires_at.isoformat()}, prefer="return=minimal")
+        return SessionResponse(session_id=session_id, actor_type="user", created_at=now, expires_at=expires_at, quotas={"runs_per_window": runs_per_window})
 
     def get_session(self, session_id: str) -> SessionResponse | None:
-        params = {
-            "select": "id,actor_type,user_id,created_at",
-            "id": f"eq.{session_id}",
-            "limit": "1",
-        }
-        with httpx.Client(timeout=20.0) as client:
-            resp = client.get(f"{self.base}/nc_sessions", params=params, headers=self._headers())
-        resp.raise_for_status()
-        rows = resp.json()
+        rows = self._request("GET", "nc_sessions", params={"select": "id,actor_type,created_at,expires_at", "id": f"eq.{session_id}", "expires_at": f"gt.{utc_now().isoformat()}", "limit": "1"})
         if not rows:
             return None
-
         row = rows[0]
-        actor = row.get("actor_type", "guest")
-        return SessionResponse(
-            session_id=row["id"],
-            actor_type=actor,
-            created_at=self._parse_iso(row["created_at"]),
-            quotas={},
-        )
+        return SessionResponse(session_id=row["id"], actor_type=row["actor_type"], created_at=self._dt(row["created_at"]), expires_at=self._dt(row["expires_at"]), quotas={})
 
     def check_and_consume_quota(self, session_id: str, *, max_runs: int, window_seconds: int) -> tuple[bool, int]:
-        cutoff = (datetime.now(UTC) - timedelta(seconds=window_seconds)).isoformat()
-        params = {
-            "select": "id",
-            "session_id": f"eq.{session_id}",
-            "event_type": "eq.generation",
-            "created_at": f"gte.{cutoff}",
-        }
-
-        with httpx.Client(timeout=20.0) as client:
-            count_resp = client.get(f"{self.base}/nc_usage_events", params=params, headers=self._headers())
-        count_resp.raise_for_status()
-        count = len(count_resp.json())
-        if count >= max_runs:
-            return False, 0
-
-        with httpx.Client(timeout=20.0) as client:
-            insert_resp = client.post(
-                f"{self.base}/nc_usage_events",
-                json={"session_id": session_id, "event_type": "generation"},
-                headers=self._headers(prefer="return=minimal"),
-            )
-        insert_resp.raise_for_status()
-
-        return True, max_runs - (count + 1)
+        rows = self._request("POST", "rpc/nc_reserve_generation_quota", json={"p_session_id": session_id, "p_max_runs": max_runs, "p_window_seconds": window_seconds})
+        result = rows[0] if isinstance(rows, list) else rows
+        return bool(result["allowed"]), int(result["remaining"])
 
     def create_project(self, session_id: str, title: str, mode: str, output_type: str) -> ProjectResponse:
-        project_id = f"proj_{uuid.uuid4().hex[:10]}"
-        now = utc_now()
-        payload = {
-            "id": project_id,
-            "owner_session_id": session_id,
-            "title": title,
-            "mode": mode,
-            "output_type": output_type,
-            "created_at": now.isoformat(),
-            "updated_at": now.isoformat(),
-        }
-
-        with httpx.Client(timeout=20.0) as client:
-            resp = client.post(
-                f"{self.base}/nc_projects",
-                json=payload,
-                headers=self._headers(prefer="return=representation"),
-            )
-        resp.raise_for_status()
-
-        return ProjectResponse(
-            id=project_id,
-            title=title,
-            mode=mode,
-            output_type=output_type,
-            owner_session_id=session_id,
-            created_at=now,
-            updated_at=now,
-        )
+        now, project_id = utc_now(), f"proj_{uuid.uuid4().hex[:10]}"
+        payload = {"id": project_id, "owner_session_id": session_id, "title": title, "mode": mode, "output_type": output_type, "created_at": now.isoformat(), "updated_at": now.isoformat()}
+        self._request("POST", "nc_projects", json=payload, prefer="return=minimal")
+        return ProjectResponse(**payload)
 
     def get_project(self, project_id: str) -> ProjectResponse | None:
-        params = {
-            "select": "id,title,mode,output_type,owner_session_id,created_at,updated_at",
-            "id": f"eq.{project_id}",
-            "limit": "1",
-        }
-        with httpx.Client(timeout=20.0) as client:
-            resp = client.get(f"{self.base}/nc_projects", params=params, headers=self._headers())
-        resp.raise_for_status()
-        rows = resp.json()
-        if not rows:
-            return None
+        rows = self._request("GET", "nc_projects", params={"select": "*", "id": f"eq.{project_id}", "limit": "1"})
+        return ProjectResponse(**rows[0]) if rows else None
 
-        row = rows[0]
-        return ProjectResponse(
-            id=row["id"],
-            title=row["title"],
-            mode=row["mode"],
-            output_type=row["output_type"],
-            owner_session_id=row["owner_session_id"],
-            created_at=self._parse_iso(row["created_at"]),
-            updated_at=self._parse_iso(row["updated_at"]),
-        )
+    def create_message(self, *, project_id: str, role: str, content: str, attachment_ids: list[str] | None = None, run_id: str | None = None, version_id: str | None = None) -> MessageResponse:
+        payload = {"id": f"msg_{uuid.uuid4().hex[:12]}", "project_id": project_id, "role": role, "content": content, "attachment_ids": attachment_ids or [], "run_id": run_id, "version_id": version_id, "created_at": utc_now().isoformat()}
+        self._request("POST", "nc_messages", json=payload, prefer="return=minimal")
+        return MessageResponse(**payload)
 
-    def create_version(
-        self,
-        *,
-        project_id: str,
-        prompt: str,
-        profile: str,
-        model: str,
-        artifacts: dict[str, str],
-        generated_code: str,
-        status: str,
-        error: str | None,
-        parent_version_id: str | None,
-        parameters: list[ParameterControl],
-    ) -> VersionResponse:
-        version_id = f"ver_{uuid.uuid4().hex[:10]}"
-        now = utc_now()
+    def list_messages(self, project_id: str) -> list[MessageResponse]:
+        rows = self._request("GET", "nc_messages", params={"select": "*", "project_id": f"eq.{project_id}", "order": "created_at.asc"})
+        return [MessageResponse(**row) for row in rows]
 
-        payload = {
-            "id": version_id,
-            "project_id": project_id,
-            "parent_version_id": parent_version_id,
-            "prompt": prompt,
-            "profile": profile,
-            "model": model,
-            "status": status,
-            "error": error,
-            "artifacts": artifacts,
-            "generated_code": generated_code,
-            "parameters": [p.model_dump() for p in parameters],
-            "created_at": now.isoformat(),
-        }
+    def create_run(self, *, project_id: str, session_id: str, parent_version_id: str | None, idempotency_key: str, message: str, attachment_ids: list[str], profile: str) -> tuple[GenerationRunResponse, bool]:
+        existing = self._request("GET", "nc_generation_runs", params={"select": "*", "project_id": f"eq.{project_id}", "idempotency_key": f"eq.{idempotency_key}", "limit": "1"})
+        if existing:
+            return GenerationRunResponse(**existing[0]), False
+        now = utc_now().isoformat()
+        payload = {"id": f"run_{uuid.uuid4().hex[:12]}", "project_id": project_id, "session_id": session_id, "parent_version_id": parent_version_id, "idempotency_key": idempotency_key, "message": message, "attachment_ids": attachment_ids, "profile": profile, "status": "submitted", "created_at": now, "updated_at": now}
+        try:
+            self._request("POST", "nc_generation_runs", json=payload, prefer="return=minimal")
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 409:
+                raise
+            raced = self._request("GET", "nc_generation_runs", params={"select": "*", "project_id": f"eq.{project_id}", "idempotency_key": f"eq.{idempotency_key}", "limit": "1"})
+            if not raced:
+                raise
+            return GenerationRunResponse(**raced[0]), False
+        return GenerationRunResponse(**payload), True
 
-        with httpx.Client(timeout=20.0) as client:
-            resp = client.post(
-                f"{self.base}/nc_versions",
-                json=payload,
-                headers=self._headers(prefer="return=representation"),
-            )
-        resp.raise_for_status()
+    def get_run(self, project_id: str, run_id: str) -> GenerationRunResponse | None:
+        rows = self._request("GET", "nc_generation_runs", params={"select": "*", "project_id": f"eq.{project_id}", "id": f"eq.{run_id}", "limit": "1"})
+        return GenerationRunResponse(**rows[0]) if rows else None
 
-        patch_params = {"id": f"eq.{project_id}"}
-        patch_payload = {"updated_at": now.isoformat()}
-        with httpx.Client(timeout=20.0) as client:
-            patch_resp = client.patch(
-                f"{self.base}/nc_projects",
-                params=patch_params,
-                json=patch_payload,
-                headers=self._headers(prefer="return=minimal"),
-            )
-        patch_resp.raise_for_status()
+    def list_runs(self, project_id: str) -> list[GenerationRunResponse]:
+        rows = self._request("GET", "nc_generation_runs", params={"select": "*", "project_id": f"eq.{project_id}", "order": "created_at.desc"})
+        return [GenerationRunResponse(**row) for row in rows]
 
-        return VersionResponse(
-            id=version_id,
-            project_id=project_id,
-            parent_version_id=parent_version_id,
-            prompt=prompt,
-            profile=profile,
-            model=model,
-            artifacts=artifacts,
-            generated_code=generated_code,
-            parameters=parameters,
-            status=status,
-            error=error,
-            created_at=now,
-        )
+    def update_run(self, project_id: str, run_id: str, **updates: Any) -> GenerationRunResponse:
+        payload = {**updates, "updated_at": utc_now().isoformat()}
+        self._request("PATCH", "nc_generation_runs", params={"id": f"eq.{run_id}", "project_id": f"eq.{project_id}"}, json=payload, prefer="return=minimal")
+        run = self.get_run(project_id, run_id)
+        if not run:
+            raise KeyError(run_id)
+        return run
+
+    def create_version(self, *, project_id: str, prompt: str, profile: str, model: str, artifacts: dict[str, str], generated_code: str, status: str, error: str | None, parent_version_id: str | None, parameters: list[ParameterControl], spec: PartSpec | None = None, spec_delta: list[dict[str, Any]] | None = None, change_summary: str = "") -> VersionResponse:
+        now, version_id = utc_now(), f"ver_{uuid.uuid4().hex[:10]}"
+        payload = {"id": version_id, "project_id": project_id, "parent_version_id": parent_version_id, "prompt": prompt, "profile": profile, "model": model, "artifacts": artifacts, "generated_code": generated_code, "parameters": [p.model_dump() for p in parameters], "spec": spec.model_dump() if spec else None, "spec_delta": spec_delta or [], "change_summary": change_summary, "status": status, "error": error, "created_at": now.isoformat()}
+        self._request("POST", "nc_versions", json=payload, prefer="return=minimal")
+        self._request("PATCH", "nc_projects", params={"id": f"eq.{project_id}"}, json={"updated_at": now.isoformat()}, prefer="return=minimal")
+        return VersionResponse(**payload)
+
+    def _version(self, row: dict) -> VersionResponse:
+        return VersionResponse(**{**row, "parameters": [ParameterControl(**p) for p in row.get("parameters") or []], "spec": PartSpec(**row["spec"]) if row.get("spec") else None})
+
+    def get_version(self, project_id: str, version_id: str) -> VersionResponse | None:
+        rows = self._request("GET", "nc_versions", params={"select": "*", "project_id": f"eq.{project_id}", "id": f"eq.{version_id}", "limit": "1"})
+        return self._version(rows[0]) if rows else None
 
     def list_versions(self, project_id: str) -> list[VersionResponse]:
-        params = {
-            "select": "id,project_id,parent_version_id,prompt,profile,model,status,error,artifacts,generated_code,parameters,created_at",
-            "project_id": f"eq.{project_id}",
-            "order": "created_at.desc",
-        }
-        with httpx.Client(timeout=20.0) as client:
-            resp = client.get(f"{self.base}/nc_versions", params=params, headers=self._headers())
-        resp.raise_for_status()
-        rows = resp.json()
+        rows = self._request("GET", "nc_versions", params={"select": "*", "project_id": f"eq.{project_id}", "order": "created_at.desc"})
+        return [self._version(row) for row in rows]
 
-        out: list[VersionResponse] = []
-        for row in rows:
-            controls = [ParameterControl(**item) for item in (row.get("parameters") or [])]
-            out.append(
-                VersionResponse(
-                    id=row["id"],
-                    project_id=row["project_id"],
-                    parent_version_id=row.get("parent_version_id"),
-                    prompt=row["prompt"],
-                    profile=row["profile"],
-                    model=row["model"],
-                    artifacts=row.get("artifacts") or {},
-                    generated_code=row.get("generated_code") or "",
-                    parameters=controls,
-                    status=row["status"],
-                    error=row.get("error"),
-                    created_at=self._parse_iso(row["created_at"]),
-                )
-            )
+    def create_attachment(self, *, project_id: str, session_id: str, content_type: str, size_bytes: int, storage_key: str, upload_url: str | None, max_active: int = 3) -> AttachmentResponse:
+        now = utc_now()
+        payload = {"id": f"att_{uuid.uuid4().hex[:12]}", "project_id": project_id, "owner_session_id": session_id, "status": "reserved", "content_type": content_type, "size_bytes": size_bytes, "storage_key": storage_key, "expires_at": (now + timedelta(days=7)).isoformat(), "created_at": now.isoformat()}
+        result = self._request("POST", "rpc/nc_reserve_attachment", json={
+            "p_id": payload["id"], "p_project_id": project_id, "p_owner_session_id": session_id,
+            "p_content_type": content_type, "p_size_bytes": size_bytes, "p_storage_key": storage_key,
+            "p_expires_at": payload["expires_at"], "p_max_active": max_active,
+        })
+        row = result[0] if isinstance(result, list) else result
+        if not row.get("reserved"):
+            raise ValueError("Project image limit reached")
+        return AttachmentResponse(**payload, upload_url=upload_url)
 
-        return out
+    def get_attachment(self, project_id: str, attachment_id: str) -> AttachmentResponse | None:
+        rows = self._request("GET", "nc_attachments", params={"select": "*", "project_id": f"eq.{project_id}", "id": f"eq.{attachment_id}", "limit": "1"})
+        return AttachmentResponse(**rows[0]) if rows else None
+
+    def list_attachments(self, project_id: str, *, include_deleted: bool = False) -> list[AttachmentResponse]:
+        params = {"select": "*", "project_id": f"eq.{project_id}", "order": "created_at.desc"}
+        if not include_deleted:
+            params["status"] = "neq.deleted"
+        return [AttachmentResponse(**row) for row in self._request("GET", "nc_attachments", params=params)]
+
+    def update_attachment(self, project_id: str, attachment_id: str, **updates: Any) -> AttachmentResponse:
+        persisted = {key: value for key, value in updates.items() if key not in {"upload_url", "preview_url"}}
+        self._request("PATCH", "nc_attachments", params={"id": f"eq.{attachment_id}", "project_id": f"eq.{project_id}"}, json=persisted, prefer="return=minimal")
+        attachment = self.get_attachment(project_id, attachment_id)
+        if not attachment:
+            raise KeyError(attachment_id)
+        return attachment
+
+    def list_expired_attachments(self) -> list[AttachmentResponse]:
+        rows = self._request("GET", "nc_attachments", params={
+            "select": "*", "status": "neq.deleted", "expires_at": f"lte.{utc_now().isoformat()}",
+        })
+        return [AttachmentResponse(**row) for row in rows]

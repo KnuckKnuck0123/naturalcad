@@ -1,101 +1,59 @@
-import { publicConfig } from "@/lib/config";
-import type {
-  CreateGuestSessionResponse,
-  CreateProjectRequest,
-  CreateProjectResponse,
-  GenerateProjectRequest,
-  ProjectDetailResponse,
-  UpdateParametersRequest,
-  VersionResponse,
-} from "@/lib/api-types";
+import type { Attachment, GenerationRun, Project, ProjectDetail } from "@/lib/api-types";
 
-async function request<TResponse>(
-  path: string,
-  method: "GET" | "POST" | "PATCH",
-  body?: unknown,
-  sessionId?: string,
-): Promise<TResponse> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+const base = "/api/naturalcad";
 
-  if (sessionId) {
-    headers["x-session-id"] = sessionId;
-  }
-
-  // Use the development key for local testing
-  headers["x-api-key"] = "naturalcad_dev_4f8c2c91b7a64e2d";
-
-  const response = await fetch(`${publicConfig.apiBaseUrl}/v1${path}`, {
+async function request<T>(path: string, method: "GET" | "POST" | "DELETE", body?: unknown): Promise<T> {
+  const response = await fetch(`${base}${path}`, {
     method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
+    headers: body === undefined ? undefined : { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: "no-store",
   });
-
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.detail?.error || `Request failed: ${response.status} ${response.statusText}`,
-    );
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.detail?.error || error.error || `Request failed (${response.status})`);
   }
-
-  return (await response.json()) as TResponse;
+  if (response.status === 204) return undefined as T;
+  return response.json() as Promise<T>;
 }
 
-export function createGuestSession() {
-  return request<CreateGuestSessionResponse>("/auth/guest", "POST", {});
+export async function createGuestSession() {
+  return request<{ actor_type: "guest"; quotas: Record<string, number> }>("/auth/guest", "POST", {});
 }
 
-export function createProject(input: CreateProjectRequest, sessionId: string) {
-  return request<CreateProjectResponse>("/projects", "POST", input, sessionId);
+export function createProject() {
+  return request<Project>("/projects", "POST", { title: "Untitled Project", mode: "part", output_type: "3d_solid" });
 }
 
-export function getProject(projectId: string, sessionId: string) {
-  return request<ProjectDetailResponse>(`/projects/${projectId}`, "GET", undefined, sessionId);
+export function getProject(projectId: string) {
+  return request<ProjectDetail>(`/projects/${projectId}`, "GET");
 }
 
-export function generateVersion(
-  projectId: string,
-  input: GenerateProjectRequest,
-  sessionId: string,
-) {
-  return request<VersionResponse>(
-    `/projects/${projectId}/generate`,
-    "POST",
-    input,
-    sessionId,
-  );
+export function startGeneration(projectId: string, message: string, parentVersionId: string | null, attachmentIds: string[]) {
+  return request<GenerationRun>(`/projects/${projectId}/generations`, "POST", {
+    message, parent_version_id: parentVersionId, attachment_ids: attachmentIds,
+    profile: "balanced", idempotency_key: crypto.randomUUID(),
+  });
 }
 
-export function updateParameters(
-  projectId: string,
-  versionId: string,
-  input: UpdateParametersRequest,
-  sessionId: string,
-) {
-  return request<VersionResponse>(
-    `/projects/${projectId}/versions/${versionId}/parameters`,
-    "PATCH",
-    input,
-    sessionId,
-  );
+export function getGeneration(projectId: string, runId: string) {
+  return request<GenerationRun>(`/projects/${projectId}/generations/${runId}`, "GET");
 }
 
-// Higher-level bootstrap for the guest workspace
-export async function bootstrapGuestWorkspace() {
-  const session = await createGuestSession();
-  const project = await createProject(
-    {
-      title: "Untitled Project",
-      mode: "part",
-      output_type: "3d_solid",
-    },
-    session.session_id,
-  );
+export function answerClarification(projectId: string, runId: string, answer: string) {
+  return request<GenerationRun>(`/projects/${projectId}/generations/${runId}/clarification`, "POST", { answer });
+}
 
-  return {
-    session,
-    project,
-    source: "remote" as const,
-  };
+export async function uploadAttachment(projectId: string, file: File): Promise<Attachment> {
+  const reserved = await request<Attachment>(`/projects/${projectId}/attachments/init`, "POST", {
+    content_type: file.type, size_bytes: file.size,
+  });
+  if (!reserved.upload_url) throw new Error("Upload reservation did not include a destination");
+  const uploaded = await fetch(reserved.upload_url, { method: "PUT", headers: { "content-type": file.type }, body: file });
+  if (!uploaded.ok) throw new Error("Image upload failed");
+  return request<Attachment>(`/projects/${projectId}/attachments/${reserved.id}/complete`, "POST", {});
+}
+
+export function deleteAttachment(projectId: string, attachmentId: string) {
+  return request<void>(`/projects/${projectId}/attachments/${attachmentId}`, "DELETE");
 }
