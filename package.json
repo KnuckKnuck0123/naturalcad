@@ -4,7 +4,10 @@
   "version": "0.1.0",
   "scripts": {
     "backend:local": "./scripts/run-local-backend.sh",
-    "frontend:local": "./scripts/run-local-frontend.sh"
+    "frontend:local": "./scripts/run-local-frontend.sh",
+    "web:dev": "npm --workspace @naturalcad/web run dev",
+    "web:build": "npm --workspace @naturalcad/web run build",
+    "web:typecheck": "npm --workspace @naturalcad/web run typecheck"
   },
   "workspaces": [
     "apps/*",

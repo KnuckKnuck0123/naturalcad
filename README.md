@@ -66,6 +66,7 @@ Turn natural-language prompts into quick CAD studies, test the interaction with 
 
 - `apps/backend-api` - domain app control-plane API (sessions, projects, conversational versions, slider updates)
 - `apps/cad-worker` - Modal worker for LLM + build123d execution
+- `apps/web` - real website + app frontend for the hosted product lane
 - `apps/web-visualizer` - earlier React/Vite prototype
 - `docs/` - product and deployment planning
 - `archive/` - older or superseded material kept for reference (includes legacy backend)
@@ -103,6 +104,13 @@ Manual fallback:
 ```bash
 pip install -r requirements.txt
 python app.py
+```
+
+Website/frontend lane:
+
+```bash
+npm run web:typecheck
+npm run web:build
 ```
 
 ## Deployment posture
