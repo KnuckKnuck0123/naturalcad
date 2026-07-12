@@ -116,6 +116,37 @@ def test_process_generation_aborts_when_run_already_claimed(monkeypatch) -> None
     assert repo.list_versions(project.id) == []
 
 
+def test_failed_run_persists_usage_from_every_attempt(monkeypatch) -> None:
+    repo, session, project = project_fixture()
+    run = _make_run(repo, session, project, key="usage-accounting")
+
+    def fake_worker_request(action: str, payload: dict):
+        if action == "resolve_spec":
+            return _mock_worker(action, payload)
+        if action == "generate_code":
+            return {
+                "success": True,
+                "generated_code": "result = part",
+                "model": "mock/cad",
+                "usage": {"total_tokens": 100, "prompt_tokens": 60, "completion_tokens": 40},
+            }
+        if action == "execute_and_publish":
+            return {"success": False, "error": "solid construction failed"}
+        raise AssertionError(f"Unexpected worker action: {action}")
+
+    monkeypatch.setattr("app.generation._worker_request", fake_worker_request)
+
+    process_generation(repo, run.id, project)
+
+    failed = repo.get_run(project.id, run.id)
+    assert failed is not None
+    assert failed.status == "failed"
+    # All three attempts must be counted, not just the last one.
+    assert failed.telemetry["cad_attempts"] == 3
+    assert failed.telemetry["cad_usage"]["total_tokens"] == 300
+    assert failed.telemetry["cad_usage"]["prompt_tokens"] == 180
+
+
 def test_supabase_jsonable_converts_nested_models() -> None:
     spec = derive_legacy_spec("Bracket width 80 and thickness 6", "part", "3d_solid")
     payload = {

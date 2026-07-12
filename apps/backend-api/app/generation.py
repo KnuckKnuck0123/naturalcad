@@ -134,6 +134,16 @@ def _process_generation_legacy(
 RUN_CLAIM_STALE_SECONDS = 600
 
 
+def _accumulate_usage(total: dict[str, int], usage: Any) -> dict[str, int]:
+    """Sum LLM usage across retry attempts so token caps count real spend,
+    including the failed attempts that make expensive runs expensive."""
+    if isinstance(usage, dict):
+        for key, value in usage.items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                total[key] = int(total.get(key, 0)) + int(value)
+    return total
+
+
 def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None:
     run = repo.get_run(project.id, run_id)
     if not run or run.status not in {"submitted", "awaiting_clarification"}:
@@ -144,6 +154,7 @@ def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None
     if claim_token is None:
         return
     started = time.monotonic()
+    telemetry: dict[str, Any] = {}
     try:
         run = repo.update_run(project.id, run.id, status="resolving_spec", error=None)
         parent = repo.get_version(project.id, run.parent_version_id) if run.parent_version_id else None
@@ -196,13 +207,17 @@ def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None
         generated: dict[str, Any] = {}
         published: dict[str, Any] = {}
         execution_error: str | None = None
+        cad_usage: dict[str, int] = {}
+        cad_attempts = 0
         for _ in range(3):
             if not repo.refresh_run_claim(project.id, run.id, claim_token):
                 return  # claim stolen; abort before spending more LLM calls
+            cad_attempts += 1
             generated = _worker_request("generate_code", {
                 "spec": spec.model_dump(), "model": settings.cad_model,
                 "execution_error": execution_error,
             })
+            _accumulate_usage(cad_usage, generated.get("usage"))
             if not generated.get("success"):
                 execution_error = generated.get("error") or "Code generation failed"
                 continue
@@ -217,9 +232,12 @@ def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None
         telemetry.update({
             "cad_model": generated.get("model", settings.cad_model),
             "cad_latency_ms": int((time.monotonic() - cad_started) * 1000),
-            "cad_usage": generated.get("usage", {}),
+            "cad_usage": cad_usage,
+            "cad_attempts": cad_attempts,
         })
         if not published.get("success"):
+            # telemetry (including accumulated cad_usage) is persisted by the
+            # failure handler so token caps count the spend of failed runs too
             raise RuntimeError(execution_error or "CAD generation failed")
         if not repo.refresh_run_claim(project.id, run.id, claim_token):
             return  # claim stolen; the new owner publishes terminal state
@@ -241,5 +259,7 @@ def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None
     except Exception as exc:  # workflow failures must become inspectable terminal state
         if not repo.refresh_run_claim(project.id, run.id, claim_token):
             return  # claim stolen; do not clobber the new owner's terminal state
-        repo.update_run(project.id, run.id, status="failed", error=str(exc)[:500])
+        current = repo.get_run(project.id, run_id)
+        failure_telemetry = {**(current.telemetry if current else {}), **telemetry}
+        repo.update_run(project.id, run.id, status="failed", error=str(exc)[:500], telemetry=failure_telemetry)
         repo.create_message(project_id=project.id, role="assistant", content="Generation failed. Please retry.", run_id=run.id)
