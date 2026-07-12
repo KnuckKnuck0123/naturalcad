@@ -39,10 +39,8 @@ class Settings:
     mode_fast_model: str = os.getenv("NATURALCAD_MODE_FAST", "openai/gpt-4o-mini")
     mode_balanced_model: str = os.getenv("NATURALCAD_MODE_BALANCED", "google/gemini-2.5-pro")
     mode_quality_model: str = os.getenv("NATURALCAD_MODE_QUALITY", "anthropic/claude-sonnet-4")
-    spec_model: str = os.getenv("NATURALCAD_SPEC_MODEL", "google/gemini-2.5-pro")
     vision_model: str = os.getenv("NATURALCAD_VISION_MODEL", "google/gemini-2.5-flash")
     cad_model: str = os.getenv("NATURALCAD_CAD_MODEL", "anthropic/claude-sonnet-4")
-    spec_resolution_max_tokens: int = int(os.getenv("NATURALCAD_SPEC_RESOLUTION_MAX_TOKENS", "900"))
     vision_summary_max_tokens: int = int(os.getenv("NATURALCAD_VISION_SUMMARY_MAX_TOKENS", "220"))
     max_guest_attachments: int = int(os.getenv("NATURALCAD_MAX_GUEST_ATTACHMENTS", "3"))
 

@@ -188,7 +188,6 @@ def test_guest_project_generation_cap_is_enforced_per_project() -> None:
 def test_guest_project_token_cap_blocks_additional_runs() -> None:
     previous = override_settings(
         guest_project_token_cap=1000,
-        spec_resolution_max_tokens=900,
         vision_summary_max_tokens=220,
         guest_runs_per_window=10,
     )

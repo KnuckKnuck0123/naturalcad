@@ -50,7 +50,6 @@ def _mock_worker(action: str, payload: dict[str, Any]) -> dict[str, Any]:
             "spec_delta": spec_delta,
             "change_summary": "Updated the structured part intent and merged dimensional edits." if len(spec_delta) > 1 else "Updated the structured part intent.",
             "clarification_questions": [],
-            "model": "local/spec-mock",
             "usage": {},
         }
     return {
@@ -165,7 +164,6 @@ def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None
                 "parent_spec": parent_spec.model_dump() if parent_spec else None,
                 "message": run.message, "mode": project.mode, "output_type": project.output_type,
                 "image_urls": image_urls,
-                "model": settings.spec_model,
                 "vision_model": settings.vision_model,
                 "vision_max_tokens": settings.vision_summary_max_tokens,
             })
@@ -174,11 +172,12 @@ def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None
             return
         spec = PartSpec.model_validate(resolution["spec"])
         telemetry = {
-            "spec_model": resolution.get("model", settings.spec_model),
             "vision_model": resolution.get("vision_model"),
             "spec_latency_ms": int((time.monotonic() - spec_started) * 1000),
             "spec_usage": resolution.get("usage", {}),
         }
+        if resolution.get("vision_error"):
+            telemetry["vision_error"] = resolution["vision_error"]
         common = {
             "draft_spec": spec,
             "spec_delta": resolution.get("spec_delta", []),

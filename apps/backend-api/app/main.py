@@ -119,8 +119,10 @@ def _project_guest_token_total(project_id: str, session_id: str) -> int:
 
 
 def _estimated_generation_token_cost(profile_id: str, attachment_count: int) -> int:
+    # Spec resolution is deterministic (no LLM call), so the estimate is the CAD
+    # generation budget plus the vision summary lane when images are attached.
     profile = MODEL_PROFILES[profile_id]
-    estimate = profile.max_tokens + settings.spec_resolution_max_tokens
+    estimate = profile.max_tokens
     if attachment_count:
         estimate += settings.vision_summary_max_tokens
     return estimate
