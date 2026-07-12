@@ -33,6 +33,18 @@ class SupabaseRepo:
         return response.json() if response.content else None
 
     @staticmethod
+    def _jsonable(value: Any) -> Any:
+        if isinstance(value, PartSpec):
+            return value.model_dump()
+        if isinstance(value, ParameterControl):
+            return value.model_dump()
+        if isinstance(value, list):
+            return [SupabaseRepo._jsonable(item) for item in value]
+        if isinstance(value, dict):
+            return {key: SupabaseRepo._jsonable(item) for key, item in value.items()}
+        return value
+
+    @staticmethod
     def _dt(value: str) -> datetime:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
@@ -108,7 +120,7 @@ class SupabaseRepo:
         return [GenerationRunResponse(**row) for row in rows]
 
     def update_run(self, project_id: str, run_id: str, **updates: Any) -> GenerationRunResponse:
-        payload = {**updates, "updated_at": utc_now().isoformat()}
+        payload = {key: self._jsonable(value) for key, value in {**updates, "updated_at": utc_now().isoformat()}.items()}
         self._request("PATCH", "nc_generation_runs", params={"id": f"eq.{run_id}", "project_id": f"eq.{project_id}"}, json=payload, prefer="return=minimal")
         run = self.get_run(project_id, run_id)
         if not run:

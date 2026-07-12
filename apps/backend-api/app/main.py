@@ -83,6 +83,89 @@ def _authorize(x_api_key: str | None, x_session_id: str | None, project_id: str)
     return session, _project(project_id, session)
 
 
+def _enforce_profile_message_length(profile_id: str, message: str) -> None:
+    profile = MODEL_PROFILES[profile_id]
+    if len(message) > profile.max_prompt_chars:
+        raise HTTPException(
+            422,
+            detail={
+                "error": f"Message exceeds the {profile.label.lower()} profile limit",
+                "profile": profile.id,
+                "max_prompt_chars": profile.max_prompt_chars,
+            },
+        )
+
+
+def _count_total_tokens(payload: Any) -> int:
+    if isinstance(payload, dict):
+        total = int(payload.get("total_tokens", 0) or 0)
+        return total + sum(_count_total_tokens(value) for key, value in payload.items() if key != "total_tokens")
+    if isinstance(payload, list):
+        return sum(_count_total_tokens(item) for item in payload)
+    return 0
+
+
+def _project_guest_generation_count(project_id: str, session_id: str) -> int:
+    return sum(1 for run in repo.list_runs(project_id) if run.session_id == session_id)
+
+
+def _project_guest_token_total(project_id: str, session_id: str) -> int:
+    total = 0
+    for run in repo.list_runs(project_id):
+        if run.session_id != session_id:
+            continue
+        total += _count_total_tokens(run.telemetry)
+    return total
+
+
+def _estimated_generation_token_cost(profile_id: str, attachment_count: int) -> int:
+    profile = MODEL_PROFILES[profile_id]
+    estimate = profile.max_tokens + settings.spec_resolution_max_tokens
+    if attachment_count:
+        estimate += settings.vision_summary_max_tokens
+    return estimate
+
+
+def _enforce_guest_project_limits(
+    session: SessionResponse,
+    project_id: str,
+    *,
+    profile_id: str,
+    attachment_count: int = 0,
+    count_as_new_generation: bool,
+) -> None:
+    if session.actor_type != "guest":
+        return
+
+    if settings.guest_project_generation_cap > 0 and count_as_new_generation:
+        generation_count = _project_guest_generation_count(project_id, session.session_id)
+        if generation_count >= settings.guest_project_generation_cap:
+            raise HTTPException(
+                429,
+                detail={
+                    "error": "Guest project generation cap reached",
+                    "limit_type": "project_generation_cap",
+                    "project_generation_cap": settings.guest_project_generation_cap,
+                },
+            )
+
+    if settings.guest_project_token_cap > 0:
+        used_tokens = _project_guest_token_total(project_id, session.session_id)
+        estimated_cost = _estimated_generation_token_cost(profile_id, attachment_count)
+        remaining_tokens = settings.guest_project_token_cap - used_tokens
+        if remaining_tokens <= 0 or remaining_tokens < estimated_cost:
+            raise HTTPException(
+                429,
+                detail={
+                    "error": "Guest project token budget reached",
+                    "limit_type": "project_token_cap",
+                    "project_token_cap": settings.guest_project_token_cap,
+                    "used_tokens": used_tokens,
+                    "estimated_next_run_tokens": estimated_cost,
+                },
+            )
+
+
 @app.get("/v1/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok", version="0.2.0")
@@ -227,6 +310,14 @@ def cleanup_expired_attachments(x_api_key: str | None = Header(None)) -> dict[st
 @app.post("/v1/projects/{project_id}/generations", response_model=GenerationRunResponse, status_code=status.HTTP_202_ACCEPTED)
 def create_generation(project_id: str, payload: GenerationRequest, background: BackgroundTasks, x_api_key: str | None = Header(None), x_session_id: str | None = Header(None)) -> GenerationRunResponse:
     session, project = _authorize(x_api_key, x_session_id, project_id)
+    _enforce_profile_message_length(payload.profile, payload.message)
+    _enforce_guest_project_limits(
+        session,
+        project_id,
+        profile_id=payload.profile,
+        attachment_count=len(payload.attachment_ids),
+        count_as_new_generation=True,
+    )
     if payload.parent_version_id and not repo.get_version(project_id, payload.parent_version_id):
         raise HTTPException(404, detail={"error": "Parent version not found"})
     for attachment_id in payload.attachment_ids:
@@ -269,11 +360,19 @@ def get_generation(project_id: str, run_id: str, background: BackgroundTasks, x_
 
 @app.post("/v1/projects/{project_id}/generations/{run_id}/clarification", response_model=GenerationRunResponse, status_code=202)
 def clarify_generation(project_id: str, run_id: str, payload: ClarificationRequest, background: BackgroundTasks, x_api_key: str | None = Header(None), x_session_id: str | None = Header(None)) -> GenerationRunResponse:
-    _, project = _authorize(x_api_key, x_session_id, project_id)
+    session, project = _authorize(x_api_key, x_session_id, project_id)
     run = repo.get_run(project_id, run_id)
     if not run or run.status != "awaiting_clarification":
         raise HTTPException(409, detail={"error": "Generation is not awaiting clarification"})
     message = f"{run.message}\n\nClarification: {payload.answer}"
+    _enforce_profile_message_length(run.profile, message)
+    _enforce_guest_project_limits(
+        session,
+        project_id,
+        profile_id=run.profile,
+        attachment_count=len(run.attachment_ids),
+        count_as_new_generation=False,
+    )
     updated = repo.update_run(project_id, run_id, status="submitted", message=message, clarification_questions=[])
     repo.create_message(project_id=project_id, role="user", content=payload.answer, run_id=run.id)
     background.add_task(process_generation, repo, run.id, project)
@@ -283,6 +382,13 @@ def clarify_generation(project_id: str, run_id: str, payload: ClarificationReque
 @app.post("/v1/projects/{project_id}/generate", response_model=VersionResponse)
 def legacy_generate(project_id: str, payload: GenerateRequest, x_api_key: str | None = Header(None), x_session_id: str | None = Header(None)) -> VersionResponse:
     session, project = _authorize(x_api_key, x_session_id, project_id)
+    _enforce_profile_message_length(payload.profile, payload.prompt)
+    _enforce_guest_project_limits(
+        session,
+        project_id,
+        profile_id=payload.profile,
+        count_as_new_generation=True,
+    )
     parent = repo.list_versions(project_id)[0] if repo.list_versions(project_id) else None
     run, _ = repo.create_run(
         project_id=project_id, session_id=session.session_id, parent_version_id=parent.id if parent else None,

@@ -30,12 +30,25 @@ def _mock_worker(action: str, payload: dict[str, Any]) -> dict[str, Any]:
             payload["message"], payload["mode"], payload["output_type"]
         )
         if parent:
-            spec = spec.model_copy(update={"intent": payload["message"]})
+            refined = derive_legacy_spec(payload["message"], payload["mode"], payload["output_type"])
+            merged_dimensions = {**spec.dimensions, **refined.dimensions}
+            semantic_part = {**spec.semantic_part, "last_user_request": payload["message"]}
+            iteration_memory = dict(spec.iteration_memory)
+            iteration_memory.update({
+                "turn_index": int(iteration_memory.get("turn_index", 0)) + 1,
+                "last_user_request": payload["message"],
+                "active_dimensions": sorted(merged_dimensions.keys()),
+            })
+            spec = spec.model_copy(update={"intent": payload["message"], "dimensions": merged_dimensions, "semantic_part": semantic_part, "iteration_memory": iteration_memory})
+        spec_delta = [{"op": "refine", "path": "/intent", "value": payload["message"]}]
+        for label, value in spec.dimensions.items():
+            if parent and isinstance(parent, dict) and (parent.get("dimensions") or {}).get(label) != value:
+                spec_delta.append({"op": "set", "path": f"/dimensions/{label}", "value": value})
         return {
             "ready_to_generate": True,
             "spec": spec.model_dump(),
-            "spec_delta": [{"op": "refine", "path": "/intent", "value": payload["message"]}],
-            "change_summary": "Updated the structured part intent.",
+            "spec_delta": spec_delta,
+            "change_summary": "Updated the structured part intent and merged dimensional edits." if len(spec_delta) > 1 else "Updated the structured part intent.",
             "clarification_questions": [],
             "model": "local/spec-mock",
             "usage": {},
@@ -43,6 +56,77 @@ def _mock_worker(action: str, payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "success": True, "urls": {}, "generated_code": "", "model": "local/cad-mock", "usage": {}
     }
+
+
+def _legacy_prompt(message: str, project: ProjectResponse, parent: Any, image_urls: list[str]) -> str:
+    prompt = message
+    if parent:
+        prompt = (
+            f"Continue from previous version {parent.id}. "
+            f"Previous prompt: {parent.prompt}\n\n"
+            f"User refinement: {message}"
+        )
+    if image_urls:
+        refs = "\n".join(f"- {url}" for url in image_urls)
+        prompt = f"{prompt}\n\nReference images:\n{refs}"
+    return prompt
+
+
+def _process_generation_legacy(
+    repo: Any,
+    project: ProjectResponse,
+    run: GenerationRunResponse,
+    parent: Any,
+    image_urls: list[str],
+    legacy_error: Exception,
+) -> None:
+    prompt = _legacy_prompt(run.message, project, parent, image_urls)
+    worker = _worker_request("legacy_generate", {
+        "prompt": prompt,
+        "mode": project.mode,
+        "output_type": project.output_type,
+    })
+    success = bool(worker.get("success")) and not worker.get("error")
+    if not success:
+        raise RuntimeError(worker.get("error") or str(legacy_error))
+    version = repo.create_version(
+        project_id=project.id,
+        prompt=run.message,
+        profile=run.profile,
+        model=worker.get("model", settings.cad_model),
+        artifacts=worker.get("urls", {}),
+        generated_code=worker.get("generated_code", ""),
+        status="completed",
+        error=None,
+        parent_version_id=run.parent_version_id,
+        parameters=extract_slider_controls(run.message),
+        spec=None,
+        spec_delta=[{
+            "op": "legacy_fallback",
+            "value": str(legacy_error)[:300],
+        }],
+        change_summary="Generated a new CAD version via legacy worker fallback.",
+    )
+    repo.update_run(
+        project.id,
+        run.id,
+        status="completed",
+        version_id=version.id,
+        change_summary=version.change_summary,
+        telemetry={
+            "fallback": "legacy_generate",
+            "legacy_error": str(legacy_error)[:300],
+            "cad_model": worker.get("model", settings.cad_model),
+            "cad_usage": worker.get("usage", {}),
+        },
+    )
+    repo.create_message(
+        project_id=project.id,
+        role="assistant",
+        content=version.change_summary,
+        run_id=run.id,
+        version_id=version.id,
+    )
 
 
 def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None:
@@ -65,14 +149,22 @@ def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None
             image_urls.append(storage.create_signed_read(attachment.sanitized_storage_key, expires_in=600))
 
         spec_started = time.monotonic()
-        resolution = _worker_request("resolve_spec", {
-            "parent_spec": parent_spec.model_dump() if parent_spec else None,
-            "message": run.message, "mode": project.mode, "output_type": project.output_type,
-            "image_urls": image_urls, "model": settings.spec_model,
-        })
+        try:
+            resolution = _worker_request("resolve_spec", {
+                "parent_spec": parent_spec.model_dump() if parent_spec else None,
+                "message": run.message, "mode": project.mode, "output_type": project.output_type,
+                "image_urls": image_urls,
+                "model": settings.spec_model,
+                "vision_model": settings.vision_model,
+                "vision_max_tokens": settings.vision_summary_max_tokens,
+            })
+        except Exception as legacy_error:
+            _process_generation_legacy(repo, project, run, parent, image_urls, legacy_error)
+            return
         spec = PartSpec.model_validate(resolution["spec"])
         telemetry = {
             "spec_model": resolution.get("model", settings.spec_model),
+            "vision_model": resolution.get("vision_model"),
             "spec_latency_ms": int((time.monotonic() - spec_started) * 1000),
             "spec_usage": resolution.get("usage", {}),
         }

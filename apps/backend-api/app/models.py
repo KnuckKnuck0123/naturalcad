@@ -88,11 +88,15 @@ class PartSpec(BaseModel):
     output_type: OutputType = "3d_solid"
     units: Literal["mm"] = "mm"
     semantic_part: dict[str, Any] = Field(default_factory=dict)
+    family_hint: dict[str, Any] = Field(default_factory=dict)
     geometry: dict[str, Any] = Field(default_factory=dict)
     dimensions: dict[str, float] = Field(default_factory=dict)
     constraints: list[dict[str, Any]] = Field(default_factory=list)
+    style: dict[str, Any] = Field(default_factory=dict)
+    iteration_memory: dict[str, Any] = Field(default_factory=dict)
     assumptions: list[str] = Field(default_factory=list)
     uncertainties: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
 
 
 class ParameterControl(BaseModel):
