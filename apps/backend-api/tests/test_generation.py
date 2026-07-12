@@ -65,6 +65,57 @@ def test_process_generation_completes_via_legacy_fallback(monkeypatch) -> None:
     assert messages[-1].content == "Generated a new CAD version via legacy worker fallback."
 
 
+def _make_run(repo, session, project, key: str = "claim-test"):
+    run, _ = repo.create_run(
+        project_id=project.id,
+        session_id=session.session_id,
+        parent_version_id=None,
+        idempotency_key=key,
+        message="Make a simple mounting bracket",
+        attachment_ids=[],
+        profile="balanced",
+    )
+    return run
+
+
+def test_claim_run_is_exclusive_until_stale() -> None:
+    repo, session, project = project_fixture()
+    run = _make_run(repo, session, project)
+
+    token = repo.claim_run(project.id, run.id, stale_seconds=600)
+    assert token is not None
+    # A second claimant (e.g. recovery loop re-enqueue) must be rejected while fresh.
+    assert repo.claim_run(project.id, run.id, stale_seconds=600) is None
+    assert repo.refresh_run_claim(project.id, run.id, token) is True
+
+    # Simulate a dead worker: age the claim past the stale threshold.
+    claimed_at, _ = repo.run_claims[run.id]
+    repo.run_claims[run.id] = (claimed_at - 601, token)
+    stolen = repo.claim_run(project.id, run.id, stale_seconds=600)
+    assert stolen is not None and stolen != token
+    # The old owner must lose its claim and stop writing.
+    assert repo.refresh_run_claim(project.id, run.id, token) is False
+    assert repo.refresh_run_claim(project.id, run.id, stolen) is True
+
+
+def test_process_generation_aborts_when_run_already_claimed(monkeypatch) -> None:
+    repo, session, project = project_fixture()
+    run = _make_run(repo, session, project)
+
+    def fail_worker(action: str, payload: dict):
+        raise AssertionError("worker must not be called for a claimed run")
+
+    monkeypatch.setattr("app.generation._worker_request", fail_worker)
+
+    assert repo.claim_run(project.id, run.id, stale_seconds=600) is not None
+    process_generation(repo, run.id, project)
+
+    unchanged = repo.get_run(project.id, run.id)
+    assert unchanged is not None
+    assert unchanged.status == "submitted"
+    assert repo.list_versions(project.id) == []
+
+
 def test_supabase_jsonable_converts_nested_models() -> None:
     spec = derive_legacy_spec("Bracket width 80 and thickness 6", "part", "3d_solid")
     payload = {

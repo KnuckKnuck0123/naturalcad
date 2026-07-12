@@ -79,6 +79,7 @@ def _process_generation_legacy(
     parent: Any,
     image_urls: list[str],
     legacy_error: Exception,
+    claim_token: str,
 ) -> None:
     prompt = _legacy_prompt(run.message, project, parent, image_urls)
     worker = _worker_request("legacy_generate", {
@@ -89,6 +90,8 @@ def _process_generation_legacy(
     success = bool(worker.get("success")) and not worker.get("error")
     if not success:
         raise RuntimeError(worker.get("error") or str(legacy_error))
+    if not repo.refresh_run_claim(project.id, run.id, claim_token):
+        return  # claim stolen; the new owner is responsible for terminal state
     version = repo.create_version(
         project_id=project.id,
         prompt=run.message,
@@ -129,9 +132,17 @@ def _process_generation_legacy(
     )
 
 
+RUN_CLAIM_STALE_SECONDS = 600
+
+
 def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None:
     run = repo.get_run(project.id, run_id)
     if not run or run.status not in {"submitted", "awaiting_clarification"}:
+        return
+    # Exclusive claim prevents the poll-triggered recovery loop from double-executing
+    # a run whose original background task is still alive (duplicate versions + LLM spend).
+    claim_token = repo.claim_run(project.id, run_id, stale_seconds=RUN_CLAIM_STALE_SECONDS)
+    if claim_token is None:
         return
     started = time.monotonic()
     try:
@@ -159,7 +170,7 @@ def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None
                 "vision_max_tokens": settings.vision_summary_max_tokens,
             })
         except Exception as legacy_error:
-            _process_generation_legacy(repo, project, run, parent, image_urls, legacy_error)
+            _process_generation_legacy(repo, project, run, parent, image_urls, legacy_error, claim_token)
             return
         spec = PartSpec.model_validate(resolution["spec"])
         telemetry = {
@@ -187,6 +198,8 @@ def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None
         published: dict[str, Any] = {}
         execution_error: str | None = None
         for _ in range(3):
+            if not repo.refresh_run_claim(project.id, run.id, claim_token):
+                return  # claim stolen; abort before spending more LLM calls
             generated = _worker_request("generate_code", {
                 "spec": spec.model_dump(), "model": settings.cad_model,
                 "execution_error": execution_error,
@@ -209,6 +222,8 @@ def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None
         })
         if not published.get("success"):
             raise RuntimeError(execution_error or "CAD generation failed")
+        if not repo.refresh_run_claim(project.id, run.id, claim_token):
+            return  # claim stolen; the new owner publishes terminal state
         repo.update_run(project.id, run.id, status="publishing", telemetry=telemetry)
         version = repo.create_version(
             project_id=project.id, prompt=run.message, profile=run.profile,
@@ -225,5 +240,7 @@ def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None
             content=version.change_summary or "Generated a new CAD version.", run_id=run.id, version_id=version.id,
         )
     except Exception as exc:  # workflow failures must become inspectable terminal state
+        if not repo.refresh_run_claim(project.id, run.id, claim_token):
+            return  # claim stolen; do not clobber the new owner's terminal state
         repo.update_run(project.id, run.id, status="failed", error=str(exc)[:500])
         repo.create_message(project_id=project.id, role="assistant", content="Generation failed. Please retry.", run_id=run.id)

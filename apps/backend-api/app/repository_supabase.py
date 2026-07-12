@@ -115,6 +115,32 @@ class SupabaseRepo:
         rows = self._request("GET", "nc_generation_runs", params={"select": "*", "project_id": f"eq.{project_id}", "id": f"eq.{run_id}", "limit": "1"})
         return GenerationRunResponse(**rows[0]) if rows else None
 
+    def claim_run(self, project_id: str, run_id: str, *, stale_seconds: int) -> str | None:
+        """Atomically claim exclusive processing of a run via a conditional UPDATE.
+        Returns a claim token, or None if another worker holds a fresh claim."""
+        token = uuid.uuid4().hex
+        cutoff = (utc_now() - timedelta(seconds=stale_seconds)).isoformat()
+        rows = self._request(
+            "PATCH", "nc_generation_runs",
+            params={
+                "id": f"eq.{run_id}", "project_id": f"eq.{project_id}",
+                "or": f'(claimed_at.is.null,claimed_at.lt."{cutoff}")',
+            },
+            json={"claimed_at": utc_now().isoformat(), "claim_token": token},
+            prefer="return=representation",
+        )
+        return token if rows else None
+
+    def refresh_run_claim(self, project_id: str, run_id: str, token: str) -> bool:
+        """Heartbeat an existing claim. Returns False if the claim was stolen."""
+        rows = self._request(
+            "PATCH", "nc_generation_runs",
+            params={"id": f"eq.{run_id}", "project_id": f"eq.{project_id}", "claim_token": f"eq.{token}"},
+            json={"claimed_at": utc_now().isoformat()},
+            prefer="return=representation",
+        )
+        return bool(rows)
+
     def list_runs(self, project_id: str) -> list[GenerationRunResponse]:
         rows = self._request("GET", "nc_generation_runs", params={"select": "*", "project_id": f"eq.{project_id}", "order": "created_at.desc"})
         return [GenerationRunResponse(**row) for row in rows]

@@ -238,6 +238,8 @@ class InMemoryRepo:
         self.project_runs: defaultdict[str, list[GenerationRunResponse]] = defaultdict(list)
         self.project_attachments: defaultdict[str, list[AttachmentResponse]] = defaultdict(list)
         self.quotas: dict[str, QuotaState] = {}
+        self.ip_quotas: dict[str, QuotaState] = {}
+        self.run_claims: dict[str, tuple[float, str]] = {}
         self._lock = threading.RLock()
 
     def create_guest_session(self, runs_per_window: int) -> SessionResponse:
@@ -335,6 +337,29 @@ class InMemoryRepo:
 
     def get_run(self, project_id: str, run_id: str) -> GenerationRunResponse | None:
         return next((r for r in self.project_runs.get(project_id, []) if r.id == run_id), None)
+
+    def claim_run(self, project_id: str, run_id: str, *, stale_seconds: int) -> str | None:
+        """Atomically claim exclusive processing of a run. Returns a claim token, or None if
+        another worker holds a fresh claim. Stale claims (dead workers) can be stolen."""
+        with self._lock:
+            if not self.get_run(project_id, run_id):
+                return None
+            now = time.time()
+            existing = self.run_claims.get(run_id)
+            if existing and now - existing[0] < stale_seconds:
+                return None
+            token = uuid.uuid4().hex
+            self.run_claims[run_id] = (now, token)
+            return token
+
+    def refresh_run_claim(self, project_id: str, run_id: str, token: str) -> bool:
+        """Heartbeat an existing claim. Returns False if the claim was stolen."""
+        with self._lock:
+            existing = self.run_claims.get(run_id)
+            if not existing or existing[1] != token:
+                return False
+            self.run_claims[run_id] = (time.time(), token)
+            return True
 
     def list_runs(self, project_id: str) -> list[GenerationRunResponse]:
         return sorted(self.project_runs.get(project_id, []), key=lambda r: r.created_at, reverse=True)
