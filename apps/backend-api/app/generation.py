@@ -6,7 +6,7 @@ from typing import Any
 import httpx
 
 from .config import settings
-from .models import GenerationRunResponse, PartSpec, ProjectResponse
+from .models import MODEL_PROFILES, GenerationRunResponse, PartSpec, ProjectResponse
 from .repository import derive_legacy_spec, extract_slider_controls
 from .storage import SupabaseImageStorage
 
@@ -85,6 +85,7 @@ def _process_generation_legacy(
         "prompt": prompt,
         "mode": project.mode,
         "output_type": project.output_type,
+        "model": settings.legacy_cad_model or settings.cad_model,
     })
     success = bool(worker.get("success")) and not worker.get("error")
     if not success:
@@ -214,7 +215,8 @@ def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None
                 return  # claim stolen; abort before spending more LLM calls
             cad_attempts += 1
             generated = _worker_request("generate_code", {
-                "spec": spec.model_dump(), "model": settings.cad_model,
+                "spec": spec.model_dump(),
+                "model": MODEL_PROFILES[run.profile].model,
                 "execution_error": execution_error,
             })
             _accumulate_usage(cad_usage, generated.get("usage"))

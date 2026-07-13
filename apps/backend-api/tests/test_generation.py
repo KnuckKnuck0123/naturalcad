@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.generation import _mock_worker, process_generation
-from app.models import ParameterControl
+from app.models import MODEL_PROFILES, ParameterControl
 from app.repository import InMemoryRepo, derive_legacy_spec
 from app.repository_supabase import SupabaseRepo
 
@@ -114,6 +114,44 @@ def test_process_generation_aborts_when_run_already_claimed(monkeypatch) -> None
     assert unchanged is not None
     assert unchanged.status == "submitted"
     assert repo.list_versions(project.id) == []
+
+
+def test_profile_dispatches_configured_model_to_worker(monkeypatch) -> None:
+    repo, session, project = project_fixture()
+    run = _make_run(repo, session, project, key="profile-dispatch")
+
+    def fake_worker_request(action: str, payload: dict):
+        if action == "resolve_spec":
+            return _mock_worker(action, payload)
+        if action == "generate_code":
+            return {
+                "success": True,
+                "generated_code": "result = part",
+                "model": payload["model"],
+                "usage": {"total_tokens": 10},
+            }
+        if action == "execute_and_publish":
+            return {"success": True, "urls": {"step": "https://example.test/part.step"}}
+        raise AssertionError(f"Unexpected worker action: {action}")
+
+    monkeypatch.setattr("app.generation._worker_request", fake_worker_request)
+
+    project_balanced = project
+    run, _ = repo.create_run(
+        project_id=project_balanced.id,
+        session_id=session.session_id,
+        parent_version_id=None,
+        idempotency_key="profile-dispatch-balanced",
+        message="A bracket",
+        attachment_ids=[],
+        profile="quality",
+    )
+    process_generation(repo, run.id, project_balanced)
+
+    completed = repo.get_run(project.id, run.id)
+    assert completed is not None
+    assert completed.status == "completed"
+    assert completed.telemetry["cad_model"] == MODEL_PROFILES["quality"].model
 
 
 def test_failed_run_persists_usage_from_every_attempt(monkeypatch) -> None:

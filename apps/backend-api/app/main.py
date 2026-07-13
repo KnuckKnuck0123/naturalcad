@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .generation import process_generation
 from .models import (
-    AttachmentInitRequest, AttachmentResponse, AuthSessionRequest, ClarificationRequest,
+    MODEL_PROFILES, AttachmentInitRequest, AttachmentResponse, AuthSessionRequest, ClarificationRequest,
     CreateProjectRequest, GenerateRequest, GenerationRequest, GenerationRunResponse,
     GuestSessionRequest, HealthResponse, ModelProfile, ProjectDetailResponse, ProjectPublicResponse,
     ProjectResponse, SessionResponse, UpdateParametersRequest, VersionResponse, utc_now,
@@ -36,11 +36,7 @@ repo = (
 )
 storage = SupabaseImageStorage()
 
-MODEL_PROFILES = {
-    "fast": ModelProfile(id="fast", label="Fast", model=settings.mode_fast_model, max_prompt_chars=700, max_tokens=800, timeout_seconds=45),
-    "balanced": ModelProfile(id="balanced", label="Balanced", model=settings.mode_balanced_model, max_prompt_chars=1200, max_tokens=1800, timeout_seconds=90),
-    "quality": ModelProfile(id="quality", label="Quality", model=settings.mode_quality_model, max_prompt_chars=1800, max_tokens=2600, timeout_seconds=140),
-}
+
 
 
 @app.middleware("http")
