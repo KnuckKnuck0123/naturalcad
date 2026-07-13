@@ -36,6 +36,11 @@ class Settings:
     guest_project_generation_cap: int = int(os.getenv("NATURALCAD_GUEST_PROJECT_GENERATION_CAP", "0"))
     guest_project_token_cap: int = int(os.getenv("NATURALCAD_GUEST_PROJECT_TOKEN_CAP", "0"))
 
+    # Per-IP abuse limits (0 = disabled). Guest sessions are free to mint, so
+    # public deployments must also cap by client IP.
+    ip_sessions_per_window: int = int(os.getenv("NATURALCAD_IP_SESSIONS_PER_WINDOW", "0"))
+    ip_runs_per_window: int = int(os.getenv("NATURALCAD_IP_RUNS_PER_WINDOW", "0"))
+
     mode_fast_model: str = os.getenv("NATURALCAD_MODE_FAST", "openai/gpt-4o-mini")
     mode_balanced_model: str = os.getenv("NATURALCAD_MODE_BALANCED", "google/gemini-2.5-pro")
     mode_quality_model: str = os.getenv("NATURALCAD_MODE_QUALITY", "anthropic/claude-sonnet-4")

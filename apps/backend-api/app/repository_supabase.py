@@ -75,6 +75,11 @@ class SupabaseRepo:
         result = rows[0] if isinstance(rows, list) else rows
         return bool(result["allowed"]), int(result["remaining"])
 
+    def check_and_consume_ip_quota(self, ip_hash: str, *, kind: str, max_events: int, window_seconds: int) -> tuple[bool, int]:
+        rows = self._request("POST", "rpc/nc_reserve_ip_quota", json={"p_ip_hash": ip_hash, "p_kind": kind, "p_max_events": max_events, "p_window_seconds": window_seconds})
+        result = rows[0] if isinstance(rows, list) else rows
+        return bool(result["allowed"]), int(result["remaining"])
+
     def create_project(self, session_id: str, title: str, mode: str, output_type: str) -> ProjectResponse:
         now, project_id = utc_now(), f"proj_{uuid.uuid4().hex[:10]}"
         payload = {"id": project_id, "owner_session_id": session_id, "title": title, "mode": mode, "output_type": output_type, "created_at": now.isoformat(), "updated_at": now.isoformat()}

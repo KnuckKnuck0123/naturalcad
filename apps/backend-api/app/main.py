@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import secrets
 import uuid
 from datetime import timedelta
@@ -48,6 +49,35 @@ async def reject_untrusted_browser_origins(request: Request, call_next):
     if request.method in {"POST", "PATCH", "DELETE"} and origin and origin not in settings.allowed_origins:
         return Response(status_code=403, content="Untrusted origin")
     return await call_next(request)
+
+
+def _client_ip(request: Request) -> str:
+    # Only reachable behind the gateway secret, so x-forwarded-for comes from our
+    # trusted BFF proxy (Vercel overwrites the header to prevent client spoofing).
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _ip_hash(ip: str) -> str:
+    # Store a salted hash, not raw IPs (privacy posture for public beta).
+    salt = settings.api_shared_secret or "naturalcad"
+    return hashlib.sha256(f"{salt}:{ip}".encode()).hexdigest()[:32]
+
+
+def _enforce_ip_quota(request: Request, *, kind: str, max_events: int) -> None:
+    if max_events <= 0:
+        return
+    allowed, _ = repo.check_and_consume_ip_quota(
+        _ip_hash(_client_ip(request)), kind=kind,
+        max_events=max_events, window_seconds=settings.rate_window_seconds,
+    )
+    if not allowed:
+        raise HTTPException(
+            429,
+            detail={"error": "Too many requests from this network. Try again later.", "limit_type": f"ip_{kind}_cap"},
+        )
 
 
 def _gateway(x_api_key: str | None) -> None:
@@ -174,8 +204,9 @@ def health() -> HealthResponse:
 
 
 @app.post("/v1/auth/guest", response_model=SessionResponse)
-def create_guest_session(payload: GuestSessionRequest, x_api_key: str | None = Header(None)) -> SessionResponse:
+def create_guest_session(payload: GuestSessionRequest, request: Request, x_api_key: str | None = Header(None)) -> SessionResponse:
     _gateway(x_api_key)
+    _enforce_ip_quota(request, kind="session", max_events=settings.ip_sessions_per_window)
     return repo.create_guest_session(settings.guest_runs_per_window)
 
 
@@ -310,8 +341,9 @@ def cleanup_expired_attachments(x_api_key: str | None = Header(None)) -> dict[st
 
 
 @app.post("/v1/projects/{project_id}/generations", response_model=GenerationRunResponse, status_code=status.HTTP_202_ACCEPTED)
-def create_generation(project_id: str, payload: GenerationRequest, background: BackgroundTasks, x_api_key: str | None = Header(None), x_session_id: str | None = Header(None)) -> GenerationRunResponse:
+def create_generation(project_id: str, payload: GenerationRequest, background: BackgroundTasks, request: Request, x_api_key: str | None = Header(None), x_session_id: str | None = Header(None)) -> GenerationRunResponse:
     session, project = _authorize(x_api_key, x_session_id, project_id)
+    _enforce_ip_quota(request, kind="run", max_events=settings.ip_runs_per_window)
     _enforce_profile_message_length(payload.profile, payload.message)
     _enforce_guest_project_limits(
         session,

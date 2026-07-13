@@ -288,6 +288,18 @@ class InMemoryRepo:
             state.bucket.append(now)
             return True, max_runs - len(state.bucket)
 
+    def check_and_consume_ip_quota(self, ip_hash: str, *, kind: str, max_events: int, window_seconds: int) -> tuple[bool, int]:
+        with self._lock:
+            state = self.ip_quotas.setdefault(f"{ip_hash}:{kind}", QuotaState(bucket=deque()))
+            now = time.time()
+            cutoff = now - window_seconds
+            while state.bucket and state.bucket[0] < cutoff:
+                state.bucket.popleft()
+            if len(state.bucket) >= max_events:
+                return False, 0
+            state.bucket.append(now)
+            return True, max_events - len(state.bucket)
+
     def create_project(self, session_id: str, title: str, mode: str, output_type: str) -> ProjectResponse:
         now = utc_now()
         project = ProjectResponse(

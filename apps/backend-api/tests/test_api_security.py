@@ -185,6 +185,65 @@ def test_guest_project_generation_cap_is_enforced_per_project() -> None:
         restore_settings(previous)
 
 
+def test_per_ip_session_cap_blocks_new_guest_sessions() -> None:
+    previous = override_settings(
+        ip_sessions_per_window=1,
+        guest_runs_per_window=10,
+    )
+    try:
+        with TestClient(main.app) as client:
+            headers = {**api_headers(), "x-forwarded-for": "203.0.113.42"}
+            first = client.post("/v1/auth/guest", headers=headers, json={})
+            assert first.status_code == 200
+            second = client.post("/v1/auth/guest", headers=headers, json={})
+            assert second.status_code == 429
+            assert second.json()["detail"]["limit_type"] == "ip_session_cap"
+    finally:
+        restore_settings(previous)
+
+
+def test_per_ip_run_cap_blocks_additional_generations() -> None:
+    previous = override_settings(
+        ip_runs_per_window=1,
+        guest_runs_per_window=10,
+        guest_project_generation_cap=0,
+        guest_project_token_cap=0,
+    )
+    try:
+        with TestClient(main.app) as client:
+            headers = {**api_headers(), "x-forwarded-for": "203.0.113.42"}
+            session = client.post("/v1/auth/guest", headers=headers, json={}).json()["session_id"]
+            project_id = create_project(client, session)
+            run_headers = {**headers, "x-session-id": session}
+            first = client.post(
+                f"/v1/projects/{project_id}/generations",
+                headers=run_headers,
+                json={
+                    "message": "Base bracket 80x50x6",
+                    "parent_version_id": None,
+                    "attachment_ids": [],
+                    "profile": "balanced",
+                    "idempotency_key": "ip-run-1",
+                },
+            )
+            assert first.status_code == 202
+            second = client.post(
+                f"/v1/projects/{project_id}/generations",
+                headers=run_headers,
+                json={
+                    "message": "Add 4 holes",
+                    "parent_version_id": None,
+                    "attachment_ids": [],
+                    "profile": "balanced",
+                    "idempotency_key": "ip-run-2",
+                },
+            )
+            assert second.status_code == 429
+            assert second.json()["detail"]["limit_type"] == "ip_run_cap"
+    finally:
+        restore_settings(previous)
+
+
 def test_guest_project_token_cap_blocks_additional_runs() -> None:
     previous = override_settings(
         guest_project_token_cap=1000,
