@@ -41,6 +41,9 @@ class Settings:
     ip_sessions_per_window: int = int(os.getenv("NATURALCAD_IP_SESSIONS_PER_WINDOW", "0"))
     ip_runs_per_window: int = int(os.getenv("NATURALCAD_IP_RUNS_PER_WINDOW", "0"))
 
+    # Kill switch: set "true" to immediately block new generations with a friendly 503.
+    generations_disabled: bool = os.getenv("NATURALCAD_GENERATIONS_DISABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+
     mode_fast_model: str = os.getenv("NATURALCAD_MODE_FAST", "openai/gpt-4o-mini")
     mode_balanced_model: str = os.getenv("NATURALCAD_MODE_BALANCED", "google/gemini-2.5-pro")
     mode_quality_model: str = os.getenv("NATURALCAD_MODE_QUALITY", "anthropic/claude-sonnet-4")

@@ -338,6 +338,8 @@ def cleanup_expired_attachments(x_api_key: str | None = Header(None)) -> dict[st
 
 @app.post("/v1/projects/{project_id}/generations", response_model=GenerationRunResponse, status_code=status.HTTP_202_ACCEPTED)
 def create_generation(project_id: str, payload: GenerationRequest, background: BackgroundTasks, request: Request, x_api_key: str | None = Header(None), x_session_id: str | None = Header(None)) -> GenerationRunResponse:
+    if settings.generations_disabled:
+        raise HTTPException(503, detail={"error": "New generations are temporarily paused. Try again later."})
     session, project = _authorize(x_api_key, x_session_id, project_id)
     _enforce_ip_quota(request, kind="run", max_events=settings.ip_runs_per_window)
     _enforce_profile_message_length(payload.profile, payload.message)

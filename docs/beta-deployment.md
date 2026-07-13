@@ -184,6 +184,9 @@ NaturalCAD ships guest beta protections in three explicit layers:
 | `NATURALCAD_GUEST_PROJECT_GENERATION_CAP` | `10` | Lets a real user iterate, kills a bot |
 | `NATURALCAD_GUEST_PROJECT_TOKEN_CAP` | `120000` | Caps real $ cost per guest project |
 | `NATURALCAD_MAX_GUEST_ATTACHMENTS` | `3` | Limit image-iteration abuse surface |
+| `NATURALCAD_IP_SESSIONS_PER_WINDOW` | `3` | Per-network guest session cap |
+| `NATURALCAD_IP_RUNS_PER_WINDOW` | `10` | Per-network generation cap |
+| `NATURALCAD_GENERATIONS_DISABLED` | `false` | Kill switch (`true` = pause new gens) |
 
 ### Noah's testing override
 Per workspace memory: Noah's own testing flows should be effectively unlimited.
@@ -195,7 +198,14 @@ NATURALCAD_GUEST_PROJECT_TOKEN_CAP=0
 ```
 or use a signed session.
 
-## 6. Prompt Poisoning / Injection Hardening
+## 6. Kill Switch
+
+For emergencies, set `NATURALCAD_GENERATIONS_DISABLED=true` on the Cloud Run
+service. This returns `503` on `POST /v1/projects/{id}/generations` without
+tearing down the rest of the app. To stop spend instantly without a full
+deploy, update the env in Google Cloud Console and restart the revision.
+
+## 7. Prompt Poisoning / Injection Hardening
 
 Beta posture, not final.
 
@@ -267,7 +277,7 @@ This is the data that lets us tune prompt processing and model routing.
 7. Open to outside testers in small batches; monitor quotas, token spend,
    latency.
 
-## 9. Kill Switches
+## 9. Additional Kill Switches
 
 If something goes wrong in beta:
 
