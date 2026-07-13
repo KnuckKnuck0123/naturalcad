@@ -11,13 +11,38 @@ blocked_paths=(
   "**/.venv/**"
 )
 
+# .env.example files are tracked templates with placeholder values only.
+allowed_example_files=(
+  "apps/backend-api/.env.example"
+  "apps/backend-api/cloudrun.env.yaml.example"
+  "apps/web/.env.example"
+  "archive/gradio-demo-backend-legacy/.env.example"
+)
+
 tracked_files="$(git ls-files)"
 
 for pattern in "${blocked_paths[@]}"; do
-  if git ls-files "$pattern" | grep -q .; then
-    echo "[prepush] blocked tracked path matches pattern: $pattern"
-    git ls-files "$pattern"
-    exit 1
+  matches=$(git ls-files "$pattern" || true)
+  if [[ -n "$matches" ]]; then
+    # Filter out explicitly allowed example templates.
+    unexpected=""
+    for file in $matches; do
+      is_allowed=0
+      for allowed in "${allowed_example_files[@]}"; do
+        if [[ "$file" == "$allowed" ]]; then
+          is_allowed=1
+          break
+        fi
+      done
+      if [[ "$is_allowed" -eq 0 ]]; then
+        unexpected="${unexpected}${file}\n"
+      fi
+    done
+    if [[ -n "$unexpected" ]]; then
+      echo -e "[prepush] blocked tracked path matches pattern: $pattern"
+      echo -e "$unexpected"
+      exit 1
+    fi
   fi
 done
 
