@@ -105,6 +105,17 @@ A small beta should not go live until all of these are true.
 
 ## 4. Required Environment Variables
 
+**Frontend (Vercel)** — set as **server-only** environment variables
+(never prefixed with `NEXT_PUBLIC_`):
+
+| Variable | Purpose |
+| --- | --- |
+| `NATURALCAD_BACKEND_URL` | URL of the Cloud Run backend API |
+| `NATURALCAD_API_KEY` | Same value as the backend `API_SHARED_SECRET` |
+
+**Backend / Worker** — see `apps/backend-api/cloudrun.env.yaml.example`.
+
+
 ### Backend API
 ```
 NATURALCAD_ENV=beta
@@ -145,12 +156,12 @@ The backend image is defined in `apps/backend-api/Dockerfile`. It listens on
 
 ### Frontend (Vercel)
 ```
-NEXT_PUBLIC_API_BASE_URL=https://api.beta.naturalcad.example
-API_SHARED_SECRET=<same as backend>            # server-only, used by route handlers
+NATURALCAD_BACKEND_URL=https://api.beta.naturalcad.example
+NATURALCAD_API_KEY=<same as backend API_SHARED_SECRET>  # server-only, used by route handlers
 ```
 
-`API_SHARED_SECRET` must be configured as a **server-only** env in Vercel, not as
-`NEXT_PUBLIC_*`. The browser never sees it.
+Both must be configured as **server-only** envs in Vercel, not as
+`NEXT_PUBLIC_*`. The browser never sees them.
 
 ### Modal CAD worker
 ```

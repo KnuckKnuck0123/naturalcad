@@ -46,7 +46,7 @@ for i in $(seq 1 30); do
   STATUS=$(echo "$POLL" | python3 -c 'import json,sys;print(json.load(sys.stdin)["status"])')
   echo "  attempt $i status=$STATUS"
   case "$STATUS" in
-    succeeded|completed|done|failed|needs_clarification|awaiting_clarification) break ;;
+    completed|failed|awaiting_clarification) break ;;
   esac
   sleep 2
 done
