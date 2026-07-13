@@ -80,7 +80,7 @@ Scope: Ship the existing stack as an open public beta with blocker fixes, model 
 
 ## Testing
 
-- Extend the existing backend suite (24 tests) with: claim-lock race, per-IP quota,
+- Extended backend suite: 30 passing tests covering claim-lock race, per-IP quota,
   profile -> model dispatch, token accumulation across attempts.
 - `npm run web:typecheck && npm run web:build` green.
 - Post-deploy: `scripts/smoke-beta.sh` against the hosted stack.
