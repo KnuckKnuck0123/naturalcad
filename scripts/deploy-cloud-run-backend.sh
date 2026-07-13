@@ -43,6 +43,8 @@ gcloud run deploy "$CLOUD_RUN_SERVICE" \
   --memory 512Mi \
   --cpu 1 \
   --timeout 300 \
+  --no-cpu-throttling \
+  --min-instances 1 \
   --max-instances 10 \
   "${ENV_ARGS[@]}" \
   --quiet
