@@ -57,6 +57,89 @@ body {
   letter-spacing: 0.5em;
 }
 
+.shell--legal {
+  min-height: 100vh;
+  padding: 40px;
+  background: var(--bg);
+}
+
+.legal-content {
+  max-width: 720px;
+  margin: 0 auto;
+  color: var(--text);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.legal-content h1 {
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  margin: 0 0 8px;
+}
+
+.legal-date {
+  color: var(--text-dim);
+  margin: 0 0 32px;
+}
+
+.legal-content h2 {
+  font-size: 1.05rem;
+  margin: 28px 0 12px;
+  color: var(--text);
+}
+
+.legal-content p,
+.legal-content ul {
+  margin: 0 0 16px;
+  color: var(--text-dim);
+}
+
+.legal-content ul {
+  padding-left: 20px;
+}
+
+.legal-content li {
+  margin-bottom: 8px;
+}
+
+.legal-content a {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.legal-footer {
+  display: flex;
+  gap: 20px;
+  justify-content: center;
+  padding: 24px 0 40px;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+}
+
+.legal-footer a {
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+.legal-footer a:hover {
+  color: var(--text);
+}
+
+.workspace-terms-note {
+  margin: 8px 0 0;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+.workspace-terms-note a {
+  color: var(--text);
+  text-decoration: underline;
+}
+
 /* Workspace */
 .workspace-grid {
   display: grid;

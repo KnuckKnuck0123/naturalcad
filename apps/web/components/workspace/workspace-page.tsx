@@ -278,8 +278,16 @@ export function WorkspacePage() {
               </div>
               <textarea className="prompt-box" value={prompt} placeholder={clarification ? "Answer the clarification questions" : "Describe the part or the next change"} disabled={busy || bootStatus !== "ready"} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void submit(); } }} />
               <div className="workspace-note workspace-note--inline">
-                {clarification ? "Clarification reply uses the profile already attached to this run." : `${currentProfile.label} profile: up to ${currentProfile.maxChars} chars. Use explicit dimensions when fit matters.`}
+                {clarification
+                  ? "Clarification reply uses the profile already attached to this run."
+                  : `${currentProfile.label} profile: up to ${currentProfile.maxChars} chars. Use explicit dimensions when fit matters.`}
               </div>
+              <p className="workspace-terms-note">
+                By generating, you agree to our{" "}
+                <a href="/terms" target="_blank" rel="noopener noreferrer">Terms</a>{" "}
+                and{" "}
+                <a href="/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>.
+              </p>
               <div className="action-row action-row--split">
                 <input ref={fileInput} className="file-input" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={chooseFiles} />
                 <button className="button button--ghost" type="button" onClick={() => fileInput.current?.click()} disabled={busy || (detail?.attachments.length || 0) >= 3}>Attach images</button>
