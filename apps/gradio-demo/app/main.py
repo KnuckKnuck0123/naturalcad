@@ -1,31 +1,27 @@
 #!/usr/bin/env python3
-"""Gradio app for live build123d geometry execution and export."""
+"""Gradio app for the NaturalCAD 2D Hugging Face lane."""
 
 from __future__ import annotations
 
+import base64
+import html
 import json
+import math
 import mimetypes
 import os
-import shutil
-import subprocess
-import sys
-import tempfile
+import re
 import time
-import traceback
 import uuid
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
 from pathlib import Path
-from urllib import error, request
+from typing import Any
 
+import ezdxf
 import gradio as gr
-import trimesh
+import httpx
+from ezdxf import units as ezdxf_units
+from shapely.geometry import Polygon
 
-BUILD123D_PYTHON = os.getenv("BUILD123D_PYTHON", sys.executable)
-BACKEND_URL = os.getenv("NATURALCAD_BACKEND_URL", os.getenv("NL_CAD_BACKEND_URL", "")).strip()
-BACKEND_API_KEY = os.getenv("NATURALCAD_API_KEY", os.getenv("NL_CAD_API_KEY", ""))
-BACKEND_TIMEOUT_SECONDS = float(os.getenv("NATURALCAD_BACKEND_TIMEOUT", "180"))
-SHOW_GENERATED_CODE = os.getenv("NATURALCAD_SHOW_CODE", "false").strip().lower() in {"1", "true", "yes", "on"}
-VERBOSE_LOGS = os.getenv("NATURALCAD_VERBOSE_LOGS", "false").strip().lower() in {"1", "true", "yes", "on"}
 ARTIFACTS_DIR = Path(__file__).parent.parent / "artifacts"
 RUNS_DIR = ARTIFACTS_DIR / "runs"
 LOGS_DIR = ARTIFACTS_DIR / "logs"
@@ -34,746 +30,770 @@ ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
+OPENROUTER_API_URL = os.getenv("OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions").strip()
+OPENROUTER_MODEL = (
+    os.getenv("NATURALCAD_2D_MODEL")
+    or os.getenv("OPENROUTER_MODEL")
+    or "openai/gpt-4.1-mini"
+).strip()
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_REFERER = os.getenv("OPENROUTER_REFERER", "").strip()
+OPENROUTER_TITLE = os.getenv("OPENROUTER_TITLE", "NaturalCAD 2D").strip()
+OPENROUTER_TIMEOUT = float(os.getenv("NATURALCAD_2D_TIMEOUT", "120"))
+
+UNIT_MAP = {
+    "mm": ezdxf_units.MM,
+    "cm": ezdxf_units.CM,
+    "m": ezdxf_units.M,
+    "in": ezdxf_units.IN,
+    "ft": ezdxf_units.FT,
+}
+
+REFERENCE_NOTE = "More reference dimensions = more accurate output."
+
 EXAMPLE_PROMPTS = [
-    ["Heavy steel bracket with 4 bolt holes, 90 mm wide, 8 mm thick", "part", "3d_solid"],
-    ["Light structural truss beam with 9 panels and a 180 mm span", "part", "3d_solid"],
-    ["Industrial notched tower block, 140 mm tall", "part", "3d_solid"],
-    ["Smooth roof canopy surface, 200 mm span, shallow rise", "part", "surface"],
-    ["Laser-cut mounting plate with 6mm corner holes, 120x70 mm (export DXF)", "sketch", "2d_vector"],
-    ["Bracket plate profile with 6 holes for a laser-cut sketch", "sketch", "2d_vector"],
-    ["Single-line floor route centerline with 3 jogs, 120 mm long", "sketch", "1d_path"],
+    "Steel mounting plate 180x90 mm with four 12 mm corner holes and center label",
+    "Wall bracket detail with two slots, one centerline, and dimensions in millimeters",
+    "Draft a hatch-filled footing detail with leader note and title text",
 ]
 
-DEFAULT_CODE = '''from build123d import *
-
-width = 80
-height = 50
-thickness = 6
-hole_diameter = 10
-
-with BuildPart() as bp:
-    with BuildSketch(Plane.XY) as base:
-        Rectangle(width, height)
-        with GridLocations(width * 0.6, height * 0.6, 2, 2):
-            Circle(hole_diameter / 2)
-    extrude(amount=thickness)
-
-result = bp.part
-'''
-
-
-def _log_info(message: str) -> None:
-    if VERBOSE_LOGS:
-        print(message)
-
-
-def _log_error(message: str) -> None:
-    print(message)
+MODEL_SYSTEM_PROMPT = """You are NaturalCAD 2D, a drafting scene generator.
+Return only valid JSON matching this schema:
+{
+  "title": "short title",
+  "units": "mm|cm|m|in|ft",
+  "layers": [{"name": "GEOMETRY", "color": 7, "linetype": "CONTINUOUS"}],
+  "polylines": [{"points": [[0,0],[10,0],[10,5],[0,5]], "layer": "GEOMETRY", "closed": true}],
+  "circles": [{"center": [0,0], "radius": 3, "layer": "GEOMETRY"}],
+  "hatches": [{"boundary": [[0,0],[10,0],[10,5],[0,5]], "layer": "HATCH", "pattern": "SOLID"}],
+  "texts": [{"text": "note", "insert": [0,0], "height": 3, "layer": "TEXT"}],
+  "dimensions": [{"start": [0,0], "end": [10,0], "offset": 10, "angle": 0, "text": "10 mm", "layer": "DIMENSIONS"}],
+  "leaders": [{"points": [[0,0],[10,10]], "text": "note", "text_height": 2.5, "layer": "ANNOTATION"}]
+}
+Rules:
+- Use numeric world coordinates only.
+- Keep the scene compact and editable.
+- Represent hatches, dimensions, leaders, and text as their own objects.
+- Prefer millimeters unless the user clearly specifies another unit.
+- If details are uncertain, keep geometry simple and preserve the user's intent in text/leader annotations.
+- Do not include markdown fences, prose, comments, or explanations."""
 
 
-def _legacy_spec_from_semantic(spec: dict) -> dict:
-    if "geometry_family" in spec and "parameters" in spec:
-        return spec
-
-    family_hint = spec.get("family_hint") or {}
-    geometry = spec.get("geometry") or {}
-    semantic_part = spec.get("semantic_part") or {}
-    dimensions = dict(spec.get("dimensions") or {})
-    output_type = spec.get("output_type", "3d_solid")
-
-    geometry_family = family_hint.get("name")
-    if not geometry_family:
-        topology = " ".join(semantic_part.get("topology") or []).lower()
-        feature_types = " ".join((f.get("feature_type", "") for f in geometry.get("features") or [] if isinstance(f, dict))).lower()
-        if "truss" in topology or "truss" in feature_types or "span" in dimensions and "panel_count" in dimensions:
-            geometry_family = "truss_beam" if output_type != "2d_vector" else "truss_elevation"
-        elif output_type == "surface":
-            geometry_family = "canopy_surface"
-        elif "tower" in topology or "mass" in topology or "notch" in feature_types:
-            geometry_family = "tower_block"
-        else:
-            geometry_family = "bracket_plate"
-
-    params = dict(dimensions)
-    if output_type == "2d_vector":
-        params.setdefault("preview_thickness", 1)
-    if geometry_family == "bracket_plate":
-        params.setdefault("width", 80)
-        params.setdefault("height", 50)
-        params.setdefault("thickness", 6)
-        params.setdefault("hole_count", 4)
-        params.setdefault("hole_diameter", 10)
-    elif geometry_family == "truss_beam":
-        params.setdefault("span", 140)
-        params.setdefault("height", 24)
-        params.setdefault("panel_count", 7)
-        params.setdefault("member_size", 3)
-    elif geometry_family == "truss_elevation":
-        params.setdefault("span", 140)
-        params.setdefault("height", 24)
-        params.setdefault("panel_count", 7)
-        params.setdefault("member_size", 3)
-        params.setdefault("preview_thickness", 1)
-    elif geometry_family == "tower_block":
-        params.setdefault("width", 30)
-        params.setdefault("length", 30)
-        params.setdefault("height", 120)
-        params.setdefault("notch", 10)
-    elif geometry_family == "canopy_surface":
-        params.setdefault("span", 160)
-        params.setdefault("depth", 90)
-        params.setdefault("peak_height", 38)
-        params.setdefault("thickness", 2)
-    elif geometry_family == "lofted_panel":
-        params.setdefault("width", 80)
-        params.setdefault("depth", 50)
-        params.setdefault("rise", 18)
-        params.setdefault("thickness", 2)
-
-    return {
-        "geometry_family": geometry_family,
-        "output_type": output_type,
-        "parameters": params,
-    }
+@dataclass
+class LayerStyle:
+    name: str
+    color: int = 7
+    linetype: str = "CONTINUOUS"
 
 
-def render_code_from_spec(spec: dict) -> str:
-    spec = _legacy_spec_from_semantic(spec)
-    geometry_family = spec.get("geometry_family", "bracket_plate")
-    output_type = spec.get("output_type", "3d_solid")
-    params = spec.get("parameters", {})
-
-    if geometry_family == "tower_block":
-        width = params.get("width", 30)
-        length = params.get("length", 30)
-        height = params.get("height", 120)
-        notch = params.get("notch", 10)
-        return f'''from build123d import *
-
-width = {width}
-length = {length}
-height = {height}
-notch = {notch}
-
-with BuildPart() as bp:
-    Box(width, length, height)
-    with Locations((0, 0, height / 4), (0, 0, -height / 4)):
-        Box(width + 2, notch, notch, mode=Mode.SUBTRACT)
-        Box(notch, length + 2, notch, mode=Mode.SUBTRACT)
-
-result = bp.part
-'''
-
-    if geometry_family == "truss_beam":
-        span = params.get("span", 140)
-        height = params.get("height", 24)
-        panel_count = max(3, int(params.get("panel_count", 7)))
-        member_size = params.get("member_size", 3)
-        return f'''from build123d import *
-
-span = {span}
-height = {height}
-chord = {member_size}
-post = {member_size}
-panel_count = {panel_count}
-
-with BuildPart() as bp:
-    with Locations((0, 0, chord / 2)):
-        Box(span, chord, chord)
-    with Locations((0, 0, height - chord / 2)):
-        Box(span, chord, chord)
-
-    panel = span / panel_count
-    post_locations = [(-span / 2 + i * panel, 0, height / 2) for i in range(panel_count + 1)]
-    with Locations(*post_locations):
-        Box(post, chord, height)
-
-result = bp.part
-'''
-
-    if geometry_family == "truss_elevation":
-        span = params.get("span", 140)
-        height = params.get("height", 24)
-        panel_count = max(3, int(params.get("panel_count", 7)))
-        member_size = params.get("member_size", 3)
-        preview_thickness = params.get("preview_thickness", 1)
-        return f'''from build123d import *
-
-span = {span}
-height = {height}
-panel_count = {panel_count}
-member_size = {member_size}
-preview_thickness = {preview_thickness}
-
-with BuildPart() as bp:
-    with BuildSketch(Plane.XY) as sk:
-        Rectangle(span, member_size, align=(Align.CENTER, Align.CENTER))
-        with Locations((0, height)):
-            Rectangle(span, member_size, align=(Align.CENTER, Align.CENTER))
-        panel = span / panel_count
-        for i in range(panel_count + 1):
-            x = -span / 2 + i * panel
-            with Locations((x, height / 2)):
-                Rectangle(member_size, height, align=(Align.CENTER, Align.CENTER))
-    extrude(amount=preview_thickness)
-
-result = bp.part
-'''
-
-    if geometry_family in {"canopy_surface", "lofted_panel"} or output_type == "surface":
-        if geometry_family == "canopy_surface":
-            span = params.get("span", 160)
-            depth = params.get("depth", 90)
-            peak_height = params.get("peak_height", 38)
-            thickness = params.get("thickness", 2)
-            return f'''from build123d import *
-
-span = {span}
-depth = {depth}
-peak_height = {peak_height}
-thickness = {thickness}
-
-with BuildPart() as bp:
-    with BuildSketch(Plane.XY.offset(0)) as s1:
-        Rectangle(span, depth)
-    with BuildSketch(Plane.XY.offset(peak_height)) as s2:
-        Rectangle(span * 0.65, depth * 0.65)
-    loft()
-    offset(amount=thickness)
-
-result = bp.part
-'''
-        width = params.get("width", 80)
-        depth = params.get("depth", 50)
-        rise = params.get("rise", 18)
-        thickness = params.get("thickness", 2)
-        return f'''from build123d import *
-
-width = {width}
-depth = {depth}
-rise = {rise}
-thickness = {thickness}
-
-with BuildPart() as bp:
-    with BuildSketch(Plane.XY.offset(0)) as s1:
-        Rectangle(width, depth)
-    with BuildSketch(Plane.XY.offset(rise)) as s2:
-        Rectangle(width * 0.55, depth * 0.55)
-    loft()
-    offset(amount=thickness)
-
-result = bp.part
-'''
-
-    width = params.get("width", 80)
-    height = params.get("height", 50)
-    hole_count = max(1, int(params.get("hole_count", 4)))
-    hole_diameter = params.get("hole_diameter", 10)
-    x_count = max(1, round(hole_count ** 0.5))
-    y_count = max(1, (hole_count + x_count - 1) // x_count)
-
-    if output_type == "2d_vector":
-        preview_thickness = params.get("preview_thickness", 1)
-        return f'''from build123d import *
-
-width = {width}
-height = {height}
-hole_diameter = {hole_diameter}
-preview_thickness = {preview_thickness}
-
-with BuildPart() as bp:
-    with BuildSketch(Plane.XY) as base:
-        Rectangle(width, height)
-        with GridLocations(width * 0.6, height * 0.6, {x_count}, {y_count}):
-            Circle(hole_diameter / 2, mode=Mode.SUBTRACT)
-    extrude(amount=preview_thickness)
-
-result = bp.part
-'''
-
-    thickness = params.get("thickness", 6)
-    return f'''from build123d import *
-
-width = {width}
-height = {height}
-thickness = {thickness}
-hole_diameter = {hole_diameter}
-
-with BuildPart() as bp:
-    with BuildSketch(Plane.XY) as base:
-        Rectangle(width, height)
-        with GridLocations(width * 0.6, height * 0.6, {x_count}, {y_count}):
-            Circle(hole_diameter / 2, mode=Mode.SUBTRACT)
-    extrude(amount=thickness)
-
-result = bp.part
-'''
+@dataclass
+class PolylineEntity:
+    points: list[tuple[float, float]]
+    layer: str = "GEOMETRY"
+    closed: bool = False
 
 
-def create_job(prompt: str, mode: str, output_type: str) -> tuple[dict | None, str]:
-    if not prompt.strip():
-        return None, ""
+@dataclass
+class CircleEntity:
+    center: tuple[float, float]
+    radius: float
+    layer: str = "GEOMETRY"
 
-    if not BACKEND_URL:
-        return None, json.dumps({"info": "backend disabled", "detail": "No NATURALCAD_BACKEND_URL configured."}, indent=2)
 
-    payload = json.dumps({"prompt": prompt, "mode": mode, "output_type": output_type}).encode()
-    headers = {"Content-Type": "application/json"}
-    if BACKEND_API_KEY:
-        headers["x-api-key"] = BACKEND_API_KEY
+@dataclass
+class HatchEntity:
+    boundary: list[tuple[float, float]]
+    layer: str = "HATCH"
+    pattern: str = "SOLID"
 
-    req = request.Request(
-        f"{BACKEND_URL.rstrip('/')}/v1/jobs",
-        data=payload,
-        headers=headers,
-        method="POST",
-    )
 
+@dataclass
+class TextEntity:
+    text: str
+    insert: tuple[float, float]
+    height: float
+    layer: str = "TEXT"
+
+
+@dataclass
+class LinearDimensionEntity:
+    start: tuple[float, float]
+    end: tuple[float, float]
+    offset: float
+    layer: str = "DIMENSIONS"
+    angle: float = 0.0
+    text: str | None = None
+
+
+@dataclass
+class LeaderEntity:
+    points: list[tuple[float, float]]
+    text: str
+    text_height: float
+    layer: str = "ANNOTATION"
+
+
+@dataclass
+class DrawingScene:
+    units: str
+    title: str
+    prompt: str
+    reference_notes: str
+    image_name: str | None
+    image_size: tuple[int, int] | None
+    layers: list[LayerStyle] = field(default_factory=list)
+    polylines: list[PolylineEntity] = field(default_factory=list)
+    circles: list[CircleEntity] = field(default_factory=list)
+    hatches: list[HatchEntity] = field(default_factory=list)
+    texts: list[TextEntity] = field(default_factory=list)
+    dimensions: list[LinearDimensionEntity] = field(default_factory=list)
+    leaders: list[LeaderEntity] = field(default_factory=list)
+
+
+def _extract_first(prompt: str, pattern: str, default: float) -> float:
+    match = re.search(pattern, prompt, re.IGNORECASE)
+    if not match:
+        return default
     try:
-        with request.urlopen(req, timeout=BACKEND_TIMEOUT_SECONDS) as response:
-            data = json.loads(response.read().decode())
-            return data, json.dumps(data, indent=2)
-    except error.HTTPError as exc:
-        detail = exc.read().decode() if exc.fp else str(exc)
-        if exc.code == 429:
-            return None, json.dumps({
-                "error": "Server busy, please try again in a moment.",
-                "detail": "The service is under load. Wait a few seconds before retrying.",
-            }, indent=2)
-        return None, json.dumps({"error": f"backend http {exc.code}", "detail": detail}, indent=2)
-    except error.URLError as exc:
-        if isinstance(exc.reason, TimeoutError) or "timed out" in str(exc.reason).lower():
-            return None, json.dumps(
-                {
-                    "error": f"backend timeout after {BACKEND_TIMEOUT_SECONDS:.0f}s",
-                    "detail": "Try a shorter prompt or retry.",
-                },
-                indent=2,
-            )
-        return None, json.dumps({"error": f"backend unavailable: {exc}"}, indent=2)
-    except TimeoutError:
-        return None, json.dumps(
-            {
-                "error": f"backend timeout after {BACKEND_TIMEOUT_SECONDS:.0f}s",
-                "detail": "Try a shorter prompt or retry.",
-            },
-            indent=2,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return None, json.dumps({"error": f"backend unavailable: {exc}"}, indent=2)
+        return float(match.group(1))
+    except ValueError:
+        return default
 
 
-def upload_job_artifact(job_id: str, kind: str, path: str) -> tuple[dict | None, str]:
-    if not BACKEND_URL or not job_id:
-        return None, ""
+def _extract_plate_size(prompt: str) -> tuple[float, float]:
+    pair = re.search(r"(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)", prompt)
+    if pair:
+        return float(pair.group(1)), float(pair.group(2))
+    width = _extract_first(prompt, r"width\s*(?:of)?\s*(\d+(?:\.\d+)?)", 180.0)
+    height = _extract_first(prompt, r"(?:height|depth)\s*(?:of)?\s*(\d+(?:\.\d+)?)", 90.0)
+    return width, height
 
-    file_path = Path(path)
-    if not file_path.exists():
-        return None, json.dumps({"error": f"artifact path missing: {path}"}, indent=2)
 
-    boundary = f"----naturalcad-{uuid.uuid4().hex}"
-    content_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-    file_bytes = file_path.read_bytes()
+def _extract_hole_count(prompt: str) -> int:
+    match = re.search(r"(\d+)\s+(?:corner\s+)?holes?", prompt, re.IGNORECASE)
+    if match:
+        return max(0, int(match.group(1)))
+    if "slot" in prompt.lower():
+        return 2
+    return 4
 
-    body = bytearray()
-    body.extend(f"--{boundary}\r\n".encode())
-    body.extend(b'Content-Disposition: form-data; name="kind"\r\n\r\n')
-    body.extend(kind.encode())
-    body.extend(b"\r\n")
 
-    body.extend(f"--{boundary}\r\n".encode())
-    body.extend(
-        f'Content-Disposition: form-data; name="file"; filename="{file_path.name}"\r\n'.encode()
-    )
-    body.extend(f"Content-Type: {content_type}\r\n\r\n".encode())
-    body.extend(file_bytes)
-    body.extend(b"\r\n")
-    body.extend(f"--{boundary}--\r\n".encode())
+def _extract_hole_diameter(prompt: str) -> float:
+    return _extract_first(prompt, r"(\d+(?:\.\d+)?)\s*mm\s+(?:corner\s+)?holes?", 12.0)
 
-    headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
-    if BACKEND_API_KEY:
-        headers["x-api-key"] = BACKEND_API_KEY
 
-    req = request.Request(
-        f"{BACKEND_URL.rstrip('/')}/v1/jobs/{job_id}/artifacts",
-        data=bytes(body),
-        headers=headers,
-        method="POST",
-    )
+def _default_layers() -> list[LayerStyle]:
+    return [
+        LayerStyle("GEOMETRY", color=7),
+        LayerStyle("CENTER", color=4, linetype="CENTER"),
+        LayerStyle("HATCH", color=8),
+        LayerStyle("DIMENSIONS", color=2),
+        LayerStyle("TEXT", color=3),
+        LayerStyle("ANNOTATION", color=6),
+    ]
+
+
+def _image_info(image_path: str | None) -> tuple[str | None, tuple[int, int] | None]:
+    if not image_path:
+        return None, None
+    path = Path(image_path)
+    image_name = path.name
+    image_size = None
     try:
-        with request.urlopen(req, timeout=BACKEND_TIMEOUT_SECONDS) as response:
-            data = json.loads(response.read().decode())
-            return data, json.dumps(data, indent=2)
-    except error.HTTPError as exc:
-        detail = exc.read().decode() if exc.fp else str(exc)
-        return None, json.dumps({"error": f"artifact upload http {exc.code}", "detail": detail}, indent=2)
-    except Exception as exc:  # noqa: BLE001
-        return None, json.dumps({"error": f"artifact upload failed: {exc}"}, indent=2)
+        from PIL import Image
+
+        with Image.open(path) as image:
+            image_size = image.size
+    except Exception:
+        image_size = None
+    return image_name, image_size
 
 
-def _append_run_log(entry: dict) -> None:
-    with RUN_LOG_PATH.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(entry) + "\n")
+def _normalize_units(value: str | None, fallback: str) -> str:
+    candidate = (value or fallback or "mm").strip().lower()
+    return candidate if candidate in UNIT_MAP else fallback
 
 
-def _generate_glb_from_stl(stl_path: str, glb_path: str) -> None:
-    loaded = trimesh.load(stl_path)
-    if isinstance(loaded, trimesh.Scene):
-        meshes = [g for g in loaded.geometry.values() if isinstance(g, trimesh.Trimesh)]
-        if not meshes:
-            raise ValueError("No mesh geometry found in STL scene")
-        mesh = trimesh.util.concatenate(meshes)
-    elif isinstance(loaded, trimesh.Trimesh):
-        mesh = loaded
+def build_fallback_scene(prompt: str, reference_notes: str, units: str, image_path: str | None) -> DrawingScene:
+    prompt = (prompt or "").strip()
+    reference_notes = (reference_notes or "").strip()
+    width, height = _extract_plate_size(prompt or "180x90")
+    hole_count = _extract_hole_count(prompt)
+    hole_diameter = _extract_hole_diameter(prompt)
+    margin = min(width, height) * 0.15
+    title = "NaturalCAD 2D Draft"
+    image_name, image_size = _image_info(image_path)
+
+    outline = [
+        (-width / 2, -height / 2),
+        (width / 2, -height / 2),
+        (width / 2, height / 2),
+        (-width / 2, height / 2),
+    ]
+    scene = DrawingScene(
+        units=units,
+        title=title,
+        prompt=prompt,
+        reference_notes=reference_notes,
+        image_name=image_name,
+        image_size=image_size,
+        layers=_default_layers(),
+    )
+    scene.polylines.append(PolylineEntity(points=outline, closed=True))
+    scene.hatches.append(HatchEntity(boundary=outline))
+
+    if hole_count >= 4:
+        hole_positions = [
+            (-width / 2 + margin, -height / 2 + margin),
+            (width / 2 - margin, -height / 2 + margin),
+            (width / 2 - margin, height / 2 - margin),
+            (-width / 2 + margin, height / 2 - margin),
+        ]
+    elif hole_count == 2:
+        hole_positions = [(-width / 4, 0.0), (width / 4, 0.0)]
     else:
-        raise ValueError(f"Unsupported mesh type: {type(loaded)}")
+        hole_positions = []
 
-    mesh.apply_transform([
-        [1, 0, 0, 0],
-        [0, 0, 1, 0],
-        [0, -1, 0, 0],
-        [0, 0, 0, 1],
-    ])
-    mesh.export(glb_path)
+    for center in hole_positions[:hole_count]:
+        scene.circles.append(CircleEntity(center=center, radius=hole_diameter / 2))
 
-
-def run_build123d_mock(code: str, prompt: str = "") -> tuple[str | None, str | None, str | None, str, str, str | None, float]:
-    return None, None, None, "Mock execution.", "Mock mode.", "mock_id", 0.0
-
-
-def run_build123d(code: str, prompt: str = "") -> tuple[str | None, str | None, str | None, str, str, str | None, float]:
-    """Run build123d code locally."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        source_file = Path(tmpdir) / "user_script.py"
-        source_file.write_text(code)
-        
-        run_id = uuid.uuid4().hex[:8]
-        stl_file = Path(tmpdir) / f"{run_id}.stl"
-        step_file = Path(tmpdir) / f"{run_id}.step"
-        glb_file = Path(tmpdir) / f"{run_id}.glb"
-        
-        logs = [f"Run ID: {run_id}"]
-        
-        runner_code = f'''
-import sys
-from pathlib import Path
-from build123d import export_stl, export_step
-from trimesh import load_mesh
-
-source = Path(r"{source_file}").read_text()
-g = {{}}
-exec(compile(source, str(source), g))
-result = g.get("result")
-if result is None:
-    sys.exit("No `result` geometry")
-
-shape = result
-if hasattr(result, "wrapped"): shape = result.wrapped
-if hasattr(result, "part"): shape = result.part
-if hasattr(result, "shape"): shape = result.shape
-
-if shape is None:
-    sys.exit("Could not extract shape")
-
-export_stl(shape, r"{stl_file}")
-export_step(shape, r"{step_file}")
-
-# Make GLB preview
-mesh = load_mesh(str(stl_file), force="mesh")
-mesh.apply_transform([
-    [1,0,0,0], [0,0,1,0], [0,-1,0,0], [0,0,0,1]])
-mesh.export(str(glb_file))
-'''
-        runner_file = Path(tmpdir) / "_runner.py"
-        runner_file.write_text(runner_code)
-        
-        result = subprocess.run(
-            [sys.executable, str(runner_file)],
-            capture_output=True, text=True, timeout=60
+    scene.polylines.append(
+        PolylineEntity(points=[(-width / 2 - 20, 0.0), (width / 2 + 20, 0.0)], layer="CENTER")
+    )
+    scene.texts.append(
+        TextEntity(
+            text=prompt or "2D drafting study",
+            insert=(-width / 2, height / 2 + 22),
+            height=max(3.0, min(width, height) * 0.05),
         )
-        logs.append(result.stdout or "")
-        if result.stderr:
-            logs.append(f"[stderr] {result.stderr[:500]}")
-        
-        if result.returncode != 0:
-            return None, None, None, "\n".join(logs), f"Error: {result.returncode}", run_id, 0.0
-        
-        # Copy files to persistent location
-        run_dir = RUNS_DIR
-        run_dir.mkdir(parents=True, exist_ok=True)
-        final_stl = run_dir / f"{run_id}.stl"
-        final_step = run_dir / f"{run_id}.step"
-        final_glb = run_dir / f"{run_id}.glb"
-        shutil.copy(stl_file, final_stl)
-        shutil.copy(step_file, final_step)
-        if glb_file.exists():
-            shutil.copy(glb_file, final_glb)
-        
-        logs.append(f"Generated: {run_id}")
-        return str(final_glb), str(final_stl), str(final_step), "\n".join(logs), "Success", run_id, 0.0
-
-
-def generate_from_prompt(prompt: str, mode: str, output_type: str):
-    started_at = time.time()
-    
-    if BACKEND_URL:
-        payload = json.dumps({
-            "prompt": prompt,
-            "mode": mode,
-            "output_type": output_type,
-        }).encode()
-        headers = {"Content-Type": "application/json"}
-
-        if BACKEND_API_KEY:
-            headers["x-api-key"] = BACKEND_API_KEY
-
-        req = request.Request(
-            BACKEND_URL,
-            data=payload,
-            headers=headers,
-            method="POST",
+    )
+    scene.dimensions.append(
+        LinearDimensionEntity(
+            start=(-width / 2, -height / 2),
+            end=(width / 2, -height / 2),
+            offset=20.0,
+            text=f"{width:g} {units}",
         )
-        try:
-            with request.urlopen(req, timeout=BACKEND_TIMEOUT_SECONDS) as response:
-                result = json.loads(response.read().decode())
+    )
+    scene.dimensions.append(
+        LinearDimensionEntity(
+            start=(width / 2, -height / 2),
+            end=(width / 2, height / 2),
+            offset=22.0,
+            angle=90.0,
+            text=f"{height:g} {units}",
+        )
+    )
+    scene.leaders.append(
+        LeaderEntity(
+            points=[
+                (width / 2 - margin, height / 2 - margin),
+                (width / 2 + 18.0, height / 2 + 18.0),
+            ],
+            text=REFERENCE_NOTE,
+            text_height=max(2.5, min(width, height) * 0.035),
+        )
+    )
+    return scene
 
-                if "error" in result:
-                    err_msg = result["error"]
-                    detail = result.get("detail", "")
-                    friendly = err_msg
-                    if "busy" in err_msg.lower() or "429" in err_msg:
-                        friendly = "⚠️ Server busy — please wait a moment and try again."
-                    elif detail:
-                        friendly = f"{err_msg}\n{detail}"
-                    return None, None, None, None, f"Error from backend:\n{friendly}", "Generation failed — try again."
 
-                urls = result.get("urls", {})
-                code = result.get("generated_code", "")
-                job_id = result.get("job_id", "")
-                
-                glb_url = urls.get("glb")
-                stl_url = urls.get("stl")
-                step_url = urls.get("step")
-                dxf_url = urls.get("dxf")
-                
-                # Download files to artifacts directory (same as local mode)
-                # so Gradio can serve them properly
-                run_dir = RUNS_DIR
-                run_dir.mkdir(parents=True, exist_ok=True)
-                run_id = uuid.uuid4().hex[:8]
-                
-                glb_file = None
-                stl_file = None
-                step_file = None
-                dxf_file = None
-                
-                if glb_url:
-                    glb_path = run_dir / f"{run_id}.glb"
-                    _log_info(f"Downloading GLB from {glb_url}")
-                    try:
-                        with request.urlopen(glb_url) as r:
-                            data = r.read()
-                            _log_info(f"Downloaded GLB bytes: {len(data)}")
-                            if len(data) < 100:
-                                _log_error("GLB file too small")
-                            with open(glb_path, "wb") as f:
-                                f.write(data)
-                        glb_file = str(glb_path)
-                        _log_info(f"GLB saved to {glb_file}, size {os.path.getsize(glb_file)}")
-                    except Exception as e:
-                        _log_error(f"GLB download failed: {e}")
-                        glb_file = None
-                    
-                if stl_url:
-                    stl_path = run_dir / f"{run_id}.stl"
-                    _log_info(f"Downloading STL from {stl_url}")
-                    try:
-                        with request.urlopen(stl_url) as r:
-                            data = r.read()
-                            _log_info(f"Downloaded STL bytes: {len(data)}")
-                            if len(data) < 100:
-                                _log_error("STL file too small")
-                            with open(stl_path, "wb") as f:
-                                f.write(data)
-                        stl_file = str(stl_path)
-                        _log_info(f"STL saved to {stl_file}, size {os.path.getsize(stl_file)}")
-                    except Exception as e:
-                        _log_error(f"STL download failed: {e}")
-                        stl_file = None
-                    
-                if step_url:
-                    step_path = run_dir / f"{run_id}.step"
-                    _log_info(f"Downloading STEP from {step_url}")
-                    try:
-                        with request.urlopen(step_url) as r:
-                            data = r.read()
-                            _log_info(f"Downloaded STEP bytes: {len(data)}")
-                            if len(data) < 100:
-                                _log_error("STEP file too small")
-                            with open(step_path, "wb") as f:
-                                f.write(data)
-                        step_file = str(step_path)
-                        _log_info(f"STEP saved to {step_file}, size {os.path.getsize(step_file)}")
-                    except Exception as e:
-                        _log_error(f"STEP download failed: {e}")
-                        step_file = None
-
-                if dxf_url:
-                    dxf_path = run_dir / f"{run_id}.dxf"
-                    _log_info(f"Downloading DXF from {dxf_url}")
-                    try:
-                        with request.urlopen(dxf_url) as r:
-                            data = r.read()
-                            _log_info(f"Downloaded DXF bytes: {len(data)}")
-                            if len(data) < 100:
-                                _log_error("DXF file too small")
-                            with open(dxf_path, "wb") as f:
-                                f.write(data)
-                        dxf_file = str(dxf_path)
-                        _log_info(f"DXF saved to {dxf_file}, size {os.path.getsize(dxf_file)}")
-                    except Exception as e:
-                        _log_error(f"DXF download failed: {e}")
-                        dxf_file = None
-
-                if not glb_file and stl_file:
-                    try:
-                        glb_path = run_dir / f"{run_id}.glb"
-                        _generate_glb_from_stl(str(stl_file), str(glb_path))
-                        glb_file = str(glb_path)
-                        _log_info(f"Generated local GLB from STL at {glb_file}")
-                    except Exception as e:
-                        _log_error(f"Local GLB generation failed: {e}")
-
-                if SHOW_GENERATED_CODE:
-                    combined_logs = f"Generated build123d code:\n\n{code}\n\n"
-                else:
-                    combined_logs = "Generation complete. (Code hidden; set NATURALCAD_SHOW_CODE=true to display.)\n\n"
-                combined_logs += "Execution complete. Artifacts uploaded to Supabase."
-                if job_id:
-                    combined_logs += f"\nJob ID: {job_id}"
-                if not glb_file and stl_file:
-                    combined_logs += "\nPreview unavailable: could not generate GLB from STL."
-                final_summary = f"Model ready!{' · ' + job_id[:8] if job_id else ''}"
-                preview_file = glb_file
-
-                return preview_file, stl_file, step_file, dxf_file, combined_logs, final_summary
-        except error.HTTPError as exc:
-            body = exc.read().decode() if exc.fp else ""
-            try:
-                detail = json.loads(body).get("error", body) if body else str(exc)
-            except Exception:
-                detail = body or str(exc)
-            return None, None, None, None, f"Backend HTTP {exc.code}: {detail}", "Generation failed."
-        except error.URLError as exc:
-            if isinstance(exc.reason, TimeoutError) or "timed out" in str(exc.reason).lower():
-                return (
-                    None,
-                    None,
-                    None,
-                    None,
-                    (
-                        f"Backend timeout after {BACKEND_TIMEOUT_SECONDS:.0f}s. "
-                        "Try a shorter prompt (fewer clauses), or retry."
-                    ),
-                    "Generation timed out.",
-                )
-            return None, None, None, None, f"Backend error: {exc}", "Generation failed."
-        except TimeoutError:
-            return (
-                None,
-                None,
-                None,
-                None,
-                (
-                    f"Backend timeout after {BACKEND_TIMEOUT_SECONDS:.0f}s. "
-                    "Try a shorter prompt (fewer clauses), or retry."
-                ),
-                "Generation timed out.",
-            )
-        except Exception as exc:
-            return None, None, None, None, f"Backend error: {exc}", "Generation failed."
-    
-    # Fallback to local code stub if backend is missing
-    spec = {
-        "output_type": output_type,
-        "geometry_family": "bracket_plate",
-        "parameters": {"width": 60, "height": 40, "thickness": 6},
+def _openrouter_headers() -> dict[str, str]:
+    if not OPENROUTER_API_KEY:
+        raise ValueError("OPENROUTER_API_KEY not configured")
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
     }
-    code = render_code_from_spec(spec)
-    combined_logs = f"Local fallback:\n{code}"
-    final_summary = "Code generated."
-    return None, None, None, None, combined_logs, final_summary
+    if OPENROUTER_REFERER:
+        headers["HTTP-Referer"] = OPENROUTER_REFERER
+    if OPENROUTER_TITLE:
+        headers["X-Title"] = OPENROUTER_TITLE
+    return headers
 
 
-def use_example(prompt: str, mode: str, output_type: str):
-    return prompt, mode, output_type
+def _data_url_for_image(image_path: str) -> str:
+    mime_type = mimetypes.guess_type(image_path)[0] or "application/octet-stream"
+    encoded = base64.b64encode(Path(image_path).read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def _strip_markdown_fences(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    elif text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    return text.strip()
+
+
+def _coerce_point(value: Any) -> tuple[float, float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    try:
+        return float(value[0]), float(value[1])
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_points(values: Any, *, minimum: int = 2) -> list[tuple[float, float]]:
+    if not isinstance(values, list):
+        return []
+    points = [point for point in (_coerce_point(item) for item in values[:64]) if point is not None]
+    return points if len(points) >= minimum else []
+
+
+def _coerce_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return default
+
+
+def scene_from_payload(
+    payload: dict[str, Any],
+    *,
+    prompt: str,
+    reference_notes: str,
+    requested_units: str,
+    image_path: str | None,
+) -> DrawingScene:
+    image_name, image_size = _image_info(image_path)
+    scene = DrawingScene(
+        units=_normalize_units(payload.get("units"), requested_units),
+        title=str(payload.get("title") or "NaturalCAD 2D Draft"),
+        prompt=prompt,
+        reference_notes=reference_notes,
+        image_name=image_name,
+        image_size=image_size,
+        layers=[],
+    )
+
+    for layer in payload.get("layers", [])[:12] if isinstance(payload.get("layers"), list) else []:
+        if not isinstance(layer, dict) or not layer.get("name"):
+            continue
+        scene.layers.append(
+            LayerStyle(
+                name=str(layer["name"]),
+                color=int(_coerce_float(layer.get("color"), 7)),
+                linetype=str(layer.get("linetype") or "CONTINUOUS"),
+            )
+        )
+    if not scene.layers:
+        scene.layers = _default_layers()
+
+    for item in payload.get("polylines", [])[:32] if isinstance(payload.get("polylines"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        points = _coerce_points(item.get("points"), minimum=2)
+        if points:
+            scene.polylines.append(
+                PolylineEntity(
+                    points=points,
+                    layer=str(item.get("layer") or "GEOMETRY"),
+                    closed=_coerce_bool(item.get("closed"), False),
+                )
+            )
+
+    for item in payload.get("circles", [])[:32] if isinstance(payload.get("circles"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        center = _coerce_point(item.get("center"))
+        radius = _coerce_float(item.get("radius"), 0.0)
+        if center and radius > 0:
+            scene.circles.append(CircleEntity(center=center, radius=radius, layer=str(item.get("layer") or "GEOMETRY")))
+
+    for item in payload.get("hatches", [])[:16] if isinstance(payload.get("hatches"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        boundary = _coerce_points(item.get("boundary"), minimum=3)
+        if boundary:
+            scene.hatches.append(
+                HatchEntity(
+                    boundary=boundary,
+                    layer=str(item.get("layer") or "HATCH"),
+                    pattern=str(item.get("pattern") or "SOLID"),
+                )
+            )
+
+    for item in payload.get("texts", [])[:24] if isinstance(payload.get("texts"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        insert = _coerce_point(item.get("insert"))
+        if insert:
+            scene.texts.append(
+                TextEntity(
+                    text=str(item.get("text") or ""),
+                    insert=insert,
+                    height=max(0.1, _coerce_float(item.get("height"), 3.0)),
+                    layer=str(item.get("layer") or "TEXT"),
+                )
+            )
+
+    for item in payload.get("dimensions", [])[:24] if isinstance(payload.get("dimensions"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        start = _coerce_point(item.get("start"))
+        end = _coerce_point(item.get("end"))
+        if start and end:
+            scene.dimensions.append(
+                LinearDimensionEntity(
+                    start=start,
+                    end=end,
+                    offset=max(0.1, _coerce_float(item.get("offset"), 10.0)),
+                    angle=_coerce_float(item.get("angle"), 0.0),
+                    text=str(item.get("text")) if item.get("text") is not None else None,
+                    layer=str(item.get("layer") or "DIMENSIONS"),
+                )
+            )
+
+    for item in payload.get("leaders", [])[:24] if isinstance(payload.get("leaders"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        points = _coerce_points(item.get("points"), minimum=2)
+        if points:
+            scene.leaders.append(
+                LeaderEntity(
+                    points=points,
+                    text=str(item.get("text") or REFERENCE_NOTE),
+                    text_height=max(0.1, _coerce_float(item.get("text_height"), 2.5)),
+                    layer=str(item.get("layer") or "ANNOTATION"),
+                )
+            )
+
+    if not scene.polylines:
+        return build_fallback_scene(prompt, reference_notes, requested_units, image_path)
+    return scene
+
+
+def request_model_scene(
+    prompt: str,
+    reference_notes: str,
+    units: str,
+    image_path: str | None,
+) -> tuple[DrawingScene | None, dict[str, Any]]:
+    if not OPENROUTER_API_KEY:
+        return None, {"source": "fallback", "reason": "OPENROUTER_API_KEY not configured"}
+
+    user_text = "\n".join(
+        [
+            f"Prompt: {prompt or 'No prompt provided.'}",
+            f"Reference notes: {reference_notes or 'None'}",
+            f"Requested units: {units}",
+            f"Accuracy note: {REFERENCE_NOTE}",
+            "Return a compact, editable drafting scene. Use hatches, dimensions, leaders, and text where they help preserve intent.",
+        ]
+    )
+    content: Any = [{"type": "text", "text": user_text}]
+    if image_path:
+        content.append({"type": "image_url", "image_url": {"url": _data_url_for_image(image_path)}})
+
+    payload = {
+        "model": OPENROUTER_MODEL,
+        "messages": [
+            {"role": "system", "content": MODEL_SYSTEM_PROMPT},
+            {"role": "user", "content": content if image_path else user_text},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 2400,
+    }
+
+    started = time.monotonic()
+    try:
+        with httpx.Client(timeout=OPENROUTER_TIMEOUT) as client:
+            response = client.post(OPENROUTER_API_URL, headers=_openrouter_headers(), json=payload)
+        response.raise_for_status()
+        data = response.json()
+        raw_content = (data.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+        if not raw_content:
+            raise ValueError("Model returned empty content")
+        payload_text = _strip_markdown_fences(raw_content)
+        scene_payload = json.loads(payload_text)
+        scene = scene_from_payload(
+            scene_payload,
+            prompt=prompt,
+            reference_notes=reference_notes,
+            requested_units=units,
+            image_path=image_path,
+        )
+        return scene, {
+            "source": "model",
+            "model": OPENROUTER_MODEL,
+            "latency_ms": int((time.monotonic() - started) * 1000),
+            "usage": data.get("usage", {}),
+        }
+    except Exception as exc:
+        return None, {
+            "source": "fallback",
+            "model": OPENROUTER_MODEL,
+            "latency_ms": int((time.monotonic() - started) * 1000),
+            "reason": str(exc),
+        }
+
+
+def scene_bounds(scene: DrawingScene) -> tuple[float, float, float, float]:
+    min_x = math.inf
+    min_y = math.inf
+    max_x = -math.inf
+    max_y = -math.inf
+
+    def include(x: float, y: float) -> None:
+        nonlocal min_x, min_y, max_x, max_y
+        min_x = min(min_x, x)
+        min_y = min(min_y, y)
+        max_x = max(max_x, x)
+        max_y = max(max_y, y)
+
+    for polyline in scene.polylines:
+        for x, y in polyline.points:
+            include(x, y)
+    for circle in scene.circles:
+        x, y = circle.center
+        include(x - circle.radius, y - circle.radius)
+        include(x + circle.radius, y + circle.radius)
+    for hatch in scene.hatches:
+        bx0, by0, bx1, by1 = Polygon(hatch.boundary).bounds
+        include(bx0, by0)
+        include(bx1, by1)
+    for text in scene.texts:
+        include(*text.insert)
+    for dim in scene.dimensions:
+        include(*dim.start)
+        include(*dim.end)
+    for leader in scene.leaders:
+        for point in leader.points:
+            include(*point)
+
+    if min_x is math.inf:
+        return -100.0, -100.0, 100.0, 100.0
+    return min_x, min_y, max_x, max_y
+
+
+def _svg_point(x: float, y: float, bounds: tuple[float, float, float, float], size: int, padding: int) -> tuple[float, float]:
+    min_x, min_y, max_x, max_y = bounds
+    span_x = max(max_x - min_x, 1.0)
+    span_y = max(max_y - min_y, 1.0)
+    scale = min((size - 2 * padding) / span_x, (size - 2 * padding) / span_y)
+    px = padding + (x - min_x) * scale
+    py = size - padding - (y - min_y) * scale
+    return px, py
+
+
+def render_svg(scene: DrawingScene) -> str:
+    size = 860
+    padding = 56
+    bounds = scene_bounds(scene)
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" width="{size}" height="{size}">',
+        '<rect width="100%" height="100%" fill="#0e1116" />',
+        '<rect x="18" y="18" width="824" height="824" rx="18" fill="#141922" stroke="#2b3342" stroke-width="2" />',
+    ]
+
+    for hatch in scene.hatches:
+        points = [_svg_point(x, y, bounds, size, padding) for x, y in hatch.boundary]
+        path = " ".join(f"{x:.2f},{y:.2f}" for x, y in points)
+        parts.append(f'<polygon points="{path}" fill="#334155" fill-opacity="0.18" stroke="none" />')
+
+    for polyline in scene.polylines:
+        points = [_svg_point(x, y, bounds, size, padding) for x, y in polyline.points]
+        path = " ".join(f"{x:.2f},{y:.2f}" for x, y in points)
+        dash = ' stroke-dasharray="12 8"' if polyline.layer == "CENTER" else ""
+        close = " Z" if polyline.closed else ""
+        parts.append(f'<path d="M {path}{close}" fill="none" stroke="#d5d9e3" stroke-width="2"{dash} />')
+
+    for circle in scene.circles:
+        cx, cy = _svg_point(circle.center[0], circle.center[1], bounds, size, padding)
+        edge, _ = _svg_point(circle.center[0] + circle.radius, circle.center[1], bounds, size, padding)
+        radius = abs(edge - cx)
+        parts.append(f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{radius:.2f}" fill="none" stroke="#d5d9e3" stroke-width="2" />')
+
+    for dim in scene.dimensions:
+        p1 = _svg_point(*dim.start, bounds, size, padding)
+        p2 = _svg_point(*dim.end, bounds, size, padding)
+        if dim.angle == 90.0:
+            p1 = (p1[0] + 34, p1[1])
+            p2 = (p2[0] + 34, p2[1])
+        else:
+            p1 = (p1[0], p1[1] + 34)
+            p2 = (p2[0], p2[1] + 34)
+        parts.append(f'<line x1="{p1[0]:.2f}" y1="{p1[1]:.2f}" x2="{p2[0]:.2f}" y2="{p2[1]:.2f}" stroke="#f59e0b" stroke-width="2" />')
+        tx = (p1[0] + p2[0]) / 2
+        ty = (p1[1] + p2[1]) / 2 - 6
+        parts.append(f'<text x="{tx:.2f}" y="{ty:.2f}" font-size="16" fill="#fbbf24" text-anchor="middle">{html.escape(dim.text or "")}</text>')
+
+    for leader in scene.leaders:
+        points = [_svg_point(x, y, bounds, size, padding) for x, y in leader.points]
+        path = " ".join(f"{x:.2f},{y:.2f}" for x, y in points)
+        parts.append(f'<polyline points="{path}" fill="none" stroke="#38bdf8" stroke-width="2" />')
+        lx, ly = points[-1]
+        parts.append(f'<text x="{lx + 8:.2f}" y="{ly - 8:.2f}" font-size="15" fill="#7dd3fc">{html.escape(leader.text)}</text>')
+
+    for text_entity in scene.texts:
+        tx, ty = _svg_point(*text_entity.insert, bounds, size, padding)
+        parts.append(f'<text x="{tx:.2f}" y="{ty:.2f}" font-size="20" fill="#e2e8f0">{html.escape(text_entity.text)}</text>')
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def export_dxf(scene: DrawingScene, path: Path) -> None:
+    document = ezdxf.new("R2010")
+    document.units = UNIT_MAP.get(scene.units, ezdxf_units.MM)
+    for layer in scene.layers:
+        if layer.name not in document.layers:
+            document.layers.add(layer.name, color=layer.color, linetype=layer.linetype)
+    modelspace = document.modelspace()
+
+    for polyline in scene.polylines:
+        modelspace.add_lwpolyline(polyline.points, close=polyline.closed, dxfattribs={"layer": polyline.layer})
+    for circle in scene.circles:
+        modelspace.add_circle(circle.center, circle.radius, dxfattribs={"layer": circle.layer})
+    for hatch in scene.hatches:
+        hatch_entity = modelspace.add_hatch(color=8, dxfattribs={"layer": hatch.layer})
+        hatch_entity.paths.add_polyline_path(hatch.boundary, is_closed=True)
+        if hatch.pattern != "SOLID":
+            hatch_entity.set_pattern_fill(hatch.pattern, scale=1.0)
+    for text_entity in scene.texts:
+        modelspace.add_text(
+            text_entity.text,
+            dxfattribs={"layer": text_entity.layer, "height": text_entity.height},
+        ).set_placement(text_entity.insert)
+    for dimension in scene.dimensions:
+        if dimension.angle == 90.0:
+            base = (dimension.start[0] + dimension.offset, (dimension.start[1] + dimension.end[1]) / 2)
+        else:
+            base = ((dimension.start[0] + dimension.end[0]) / 2, dimension.start[1] - dimension.offset)
+        dim = modelspace.add_linear_dim(
+            base=base,
+            p1=dimension.start,
+            p2=dimension.end,
+            angle=dimension.angle,
+            dxfattribs={"layer": dimension.layer},
+            override={"dimtad": 1},
+        )
+        dim.render()
+    for leader in scene.leaders:
+        modelspace.add_lwpolyline(leader.points, dxfattribs={"layer": leader.layer})
+        modelspace.add_text(
+            leader.text,
+            dxfattribs={"layer": leader.layer, "height": leader.text_height},
+        ).set_placement(leader.points[-1])
+    document.saveas(path)
+
+
+def write_run_log(payload: dict[str, Any]) -> None:
+    with RUN_LOG_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload) + "\n")
+
+
+def generate_drawing(
+    prompt: str,
+    sketch_image: str | None,
+    reference_notes: str,
+    units: str,
+) -> tuple[str, str, str, str]:
+    run_id = uuid.uuid4().hex[:8]
+    scene, model_meta = request_model_scene(prompt, reference_notes, units, sketch_image)
+    if scene is None:
+        scene = build_fallback_scene(prompt, reference_notes, units, sketch_image)
+
+    dxf_path = RUNS_DIR / f"{run_id}.dxf"
+    export_dxf(scene, dxf_path)
+    svg_markup = render_svg(scene)
+    preview_path = RUNS_DIR / f"{run_id}.svg"
+    preview_path.write_text(svg_markup, encoding="utf-8")
+
+    summary = {
+        "run_id": run_id,
+        "title": scene.title,
+        "units": scene.units,
+        "image_name": scene.image_name,
+        "image_size": scene.image_size,
+        "entity_counts": {
+            "polylines": len(scene.polylines),
+            "circles": len(scene.circles),
+            "hatches": len(scene.hatches),
+            "dimensions": len(scene.dimensions),
+            "leaders": len(scene.leaders),
+            "texts": len(scene.texts),
+        },
+        "reference_notes": scene.reference_notes,
+        "note": REFERENCE_NOTE,
+        "source": model_meta.get("source", "fallback"),
+        "model": model_meta.get("model"),
+        "model_latency_ms": model_meta.get("latency_ms"),
+        "usage": model_meta.get("usage", {}),
+        "fallback_reason": model_meta.get("reason"),
+    }
+    write_run_log(summary)
+
+    status_lines = [
+        f"Run `{run_id}` complete.",
+        f"Source: `{summary['source']}`",
+        f"Units: `{scene.units}`",
+        f"DXF: `{dxf_path.name}`",
+        REFERENCE_NOTE,
+    ]
+    if summary.get("model"):
+        status_lines.append(f"Model: `{summary['model']}`")
+    if summary.get("fallback_reason"):
+        status_lines.append(f"Fallback reason: `{summary['fallback_reason']}`")
+    if scene.image_name:
+        image_suffix = f" ({scene.image_size[0]}x{scene.image_size[1]})" if scene.image_size else ""
+        status_lines.append(f"Sketch input: `{scene.image_name}`{image_suffix}")
+
+    return svg_markup, str(dxf_path), json.dumps(summary, indent=2), "\n".join(status_lines)
 
 
 def build_ui() -> gr.Blocks:
-    with gr.Blocks(title="NaturalCAD", theme=gr.themes.Base()) as demo:
+    with gr.Blocks(title="NaturalCAD 2D", theme=gr.themes.Soft()) as demo:
         gr.Markdown(
-            "# NaturalCAD\n"
-            "⚠️ **Alpha Demo — We're testing the service under load.**\n"
-            "*If the service is busy, please wait a moment and try again.*"
-        )
-        gr.Markdown(
-            "**Best for demo:** one-shot parts, frames, blocks, canopies, and simple profiles."
-        )
+            """
+            # NaturalCAD 2D
+            Prompt, sketch, or combine both to generate a QCAD-ready DXF study.
 
-        with gr.Row(equal_height=True):
-            with gr.Column(scale=1, min_width=360):
-                prompt_input = gr.Textbox(
-                    label="Describe what you want",
-                    placeholder="A heavy steel bracket with 4 bolt holes, 90 mm wide and 8 mm thick",
-                    lines=6,
+            More reference dimensions = more accurate output.
+            """
+        )
+        with gr.Row():
+            with gr.Column(scale=1):
+                prompt = gr.Textbox(
+                    label="Text prompt",
+                    placeholder="Describe the drawing you want: plate size, holes, notes, dimensions, hatch, title...",
+                    lines=5,
                 )
-                with gr.Row():
-                    mode_picker = gr.Dropdown(choices=["part", "assembly", "sketch"], value="part", label="Mode")
-                    output_picker = gr.Dropdown(choices=["3d_solid", "surface", "2d_vector", "1d_path"], value="3d_solid", label="Output")
-                generate_btn = gr.Button("Generate Model", variant="primary")
-                gr.Markdown("### Try one of these")
-                gr.Examples(
-                    examples=EXAMPLE_PROMPTS,
-                    inputs=[prompt_input, mode_picker, output_picker],
-                    fn=use_example,
-                    outputs=[prompt_input, mode_picker, output_picker],
-                    cache_examples=False,
+                sketch_image = gr.Image(type="filepath", label="Sketch image")
+                reference_notes = gr.Textbox(
+                    label="Reference dimensions or notes",
+                    placeholder="Example: overall width 180 mm, holes are 12 mm, centerline through plate",
+                    lines=4,
                 )
+                units = gr.Dropdown(choices=list(UNIT_MAP.keys()), value="mm", label="Units")
+                generate = gr.Button("Generate 2D DXF", variant="primary")
+                gr.Examples(examples=EXAMPLE_PROMPTS, inputs=prompt)
+            with gr.Column(scale=1):
+                preview = gr.HTML(label="Preview")
+                dxf_file = gr.File(label="DXF download")
+                scene_summary = gr.Code(label="Scene summary", language="json")
+                status = gr.Markdown()
 
-            with gr.Column(scale=2, min_width=520):
-                model_viewer = gr.Model3D(label="Preview", elem_id="model-viewer", display_mode="solid")
-                with gr.Row():
-                    stl_download = gr.File(label="Download STL")
-                    step_download = gr.File(label="Download STEP")
-                    dxf_download = gr.File(label="Download DXF")
-                status_output = gr.Markdown("Ready. Use the mouse to orbit, pan, and zoom the model.")
-
-        log_output = gr.Textbox(
-            label="Run log",
-            lines=7,
-            max_lines=20,
-            interactive=False,
-            elem_classes=["log-box"],
-        )
-
-        generate_btn.click(
-            fn=generate_from_prompt,
-            inputs=[prompt_input, mode_picker, output_picker],
-            outputs=[model_viewer, stl_download, step_download, dxf_download, log_output, status_output],
+        generate.click(
+            fn=generate_drawing,
+            inputs=[prompt, sketch_image, reference_notes, units],
+            outputs=[preview, dxf_file, scene_summary, status],
         )
 
     return demo
 
 
 if __name__ == "__main__":
-    app = build_ui()
-    app.launch(
-        server_name="0.0.0.0",
-        server_port=7860,
-        css="""
-        #model-viewer {height: 620px !important; border-radius: 18px; overflow: hidden;}
-        .log-box textarea {font-family: 'JetBrains Mono', monospace; font-size: 13px;}
-        .gradio-container {max-width: 1380px !important;}
-        button.primary {font-weight: 700;}
-        """,
-    )
+    build_ui().launch(server_name="0.0.0.0", server_port=7860)

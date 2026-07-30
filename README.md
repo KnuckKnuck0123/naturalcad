@@ -1,5 +1,5 @@
 ---
-title: NaturalCAD
+title: NaturalCAD 2D
 emoji: 🍃
 colorFrom: gray
 colorTo: blue
@@ -8,13 +8,13 @@ app_port: 7860
 pinned: false
 ---
 
-# NaturalCAD
+# NaturalCAD 2D
 
 <p align="center">
   <img src="docs/assets/naturalcad-logo-current.jpg" alt="NaturalCAD logo" width="220" />
 </p>
 
-**NaturalCAD** is a conversational CAD product built around build123d, with the main product lane now centered on the website frontend in `apps/web`.
+**NaturalCAD 2D** is the Hugging Face drafting lane for sketch/text to DXF, split apart from the main 3D product work.
 
 The current product direction is:
 - a hosted web app with a simple loop: prompt, generate, iterate, export
@@ -27,10 +27,10 @@ The current product direction is:
 - Legacy public Hugging Face demo still exists at: https://huggingface.co/spaces/kNOWare/naturalcad
 - Use this repo if you want to run locally, self-host, or continue product development
 
-Current output posture:
-- browser preview uses GLB when available
-- STEP remains the main CAD handoff artifact
-- STL remains available as a mesh export
+Current branch split posture:
+- `NaturalCAD 3D` stays focused on 3D generation/export in the website lane
+- the Hugging Face lane can be narrower and faster
+- this branch repurposes the HF app toward `text/sketch -> 2D DXF`
 
 NaturalCAD is still early, but the real work is no longer just a text-to-CAD toy. The product is being shaped toward useful multi-turn CAD generation and, over time, replacement-part reconstruction.
 
@@ -44,9 +44,9 @@ NaturalCAD is still early, but the real work is no longer just a text-to-CAD toy
 - `apps/backend-api` - control-plane API for sessions, projects, versions, and iteration
 - `apps/cad-worker` - CAD execution worker for LLM + build123d generation
 
-Legacy / older lanes still in the repo:
+Secondary / alternate lanes still in the repo:
 - `app.py` - Hugging Face Space entrypoint
-- `apps/gradio-demo` - older demo-first UI lane
+- `apps/gradio-demo` - Hugging Face 2D drafting lane on this branch
 - `apps/web-visualizer` - earlier React/Vite prototype
 - `archive/` - older or superseded material kept for reference
 
@@ -74,31 +74,21 @@ Legacy / older lanes still in the repo:
    - `SUPABASE_BUCKET`
    - `NATURALCAD_API_KEY`
 
-### Legacy Gradio demo lane
+### Hugging Face 2D lane
 
-If you need to run the older Hugging Face/demo-oriented app:
+If you need to run the Hugging Face 2D drafting app:
 
 ```bash
 npm run frontend:local
 ```
 
-Optional local backend contract test:
-
-```bash
-npm run backend:local
-```
-
-That uses the helper scripts:
-- `scripts/run-local-backend.sh`
+Helper script:
 - `scripts/run-local-frontend.sh`
 
 Notes:
-- frontend local dev needs Python 3.10-3.13 because `build123d` does not currently publish wheels for Python 3.14+
 - the frontend helper expects a working Python venv; default path is `~/.openclaw/workspace/.venvs/cadrender312`
-- for hosted testing, set `NATURALCAD_BACKEND_URL` to the Modal endpoint
-- if `NATURALCAD_BACKEND_URL` is unset, the helper defaults to `http://127.0.0.1:8010`
-- if `apps/backend-api/.env` exists, the frontend helper also reuses `API_SHARED_SECRET` as `NATURALCAD_API_KEY`
 - if you want a different frontend venv, set `NATURALCAD_FRONTEND_VENV=/path/to/venv`
+- this branch's HF app currently runs as a local DXF generator and previewer without needing the 3D backend path
 
 Manual fallback:
 
@@ -122,7 +112,7 @@ Current recommended shape:
 - Supabase = state + storage
 - OpenRouter or equivalent = model provider layer
 
-The Hugging Face app still exists as a legacy demo lane, but it is no longer the main product framing for this repo.
+The Hugging Face app is intentionally separate from the main 3D product framing for this repo.
 
 ### Hosted env wiring
 
@@ -159,4 +149,3 @@ See `docs/github-push-safety.md` for the full branch and review policy.
 - `docs/backend-v0.md`
 - `docs/security-policy-v0.md`
 - `docs/engine-assembly-milestone.md`
-

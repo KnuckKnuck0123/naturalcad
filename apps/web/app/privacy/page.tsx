@@ -29,7 +29,7 @@ export default function PrivacyPage() {
             <strong>Reference images.</strong> Images you upload to guide generation.
           </li>
           <li>
-            <strong>Generated artifacts.</strong> CAD files (STEP, STL, GLB, DXF) and the
+            <strong>Generated artifacts.</strong> CAD files (STEP, STL, GLB) and the
             code used to produce them.
           </li>
           <li>

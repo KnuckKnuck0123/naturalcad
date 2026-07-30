@@ -1,21 +1,22 @@
 # NaturalCAD HF Space Notes
 
 ## Current intent
-- Public-facing NaturalCAD app
-- build123d-backed execution loop
-- Noah will wire a service endpoint for LLM generation later
+- Public-facing NaturalCAD 2D app
+- sketch/image/text to editable DXF
+- lightweight Hugging Face test lane before deeper website integration
 
 ## Current prototype state
 - Gradio UI
-- real build123d execution
-- STL preview
-- STL + STEP downloads
+- text prompt, sketch image, or both
+- SVG preview
+- DXF download
+- lightweight internal drafting scene model
+- first real OpenRouter model-call path with local fallback
 - starter sample picker
-- prompt note field for future LLM integration
 - archived per-run artifacts under `artifacts/runs/`
 
 ## Next likely steps
-- add endpoint config pattern for external LLM service
-- convert prompt note into real prompt-to-code flow
-- improve public-facing examples
-- add safe execution constraints for Spaces
+- wire a real model call into the drafting scene schema
+- improve public-facing examples and test sketches
+- expand drafting coverage: hatches, linetypes, dimensions, leaders, text
+- validate outputs in QCAD before shifting the lane back toward the main website

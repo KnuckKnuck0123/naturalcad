@@ -665,7 +665,7 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
         if log_generated_code:
             _log_info(f"Generated code:\n{generated_code}")
 
-        from build123d import Axis, ExportDXF, Unit, export_step, export_stl
+        from build123d import export_step, export_stl
 
         with tempfile.TemporaryDirectory() as tmpdir:
             script_path = Path(tmpdir) / "script.py"
@@ -746,14 +746,13 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
                     }
 
             # ----------------------------------------------------------------
-            # Export: STL, STEP, GLB, DXF
+            # Export: STL, STEP, GLB
             # ----------------------------------------------------------------
             shape = result_shape
             urls = {}
             stl_path = Path(tmpdir) / "output.stl"
             step_path = Path(tmpdir) / "output.step"
             glb_path = Path(tmpdir) / "output.glb"
-            dxf_path = Path(tmpdir) / "output.dxf"
 
             try:
                 export_stl(shape, str(stl_path))
@@ -785,24 +784,6 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
             except Exception as e:
                 _log_error(f"GLB export failed: {e}")
 
-            try:
-                if output_type in {"2d_vector", "1d_path"}:
-                    exporter = ExportDXF(unit=Unit.MM)
-                    if output_type == "1d_path":
-                        exporter.add_shape(shape.edges())
-                    else:
-                        faces = shape.faces()
-                        if faces:
-                            top_face = faces.sort_by(Axis.Z)[-1]
-                            wires = [top_face.outer_wire(), *list(top_face.inner_wires())]
-                            exporter.add_shape(wires)
-                        else:
-                            exporter.add_shape(shape.edges())
-                    exporter.write(str(dxf_path))
-                    _log_info(f"DXF exported: {dxf_path.exists()}")
-            except Exception as e:
-                _log_error(f"DXF export failed: {e}")
-
             # ----------------------------------------------------------------
             # Upload to Supabase storage
             # ----------------------------------------------------------------
@@ -810,8 +791,6 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
                 ("stl", stl_path, "model/stl"),
                 ("step", step_path, "application/octet-stream"),
             ]
-            if dxf_path.exists():
-                file_pairs.append(("dxf", dxf_path, "application/dxf"))
             if store_glb:
                 file_pairs.append(("glb", glb_path, "model/gltf-binary"))
             for fmt, file_path, content_type in file_pairs:
@@ -1241,7 +1220,7 @@ def resolve_spec(payload: dict):
 )
 def execute_generated_cad(code: str, output_type: str):
     """Execute generated code in a function with no attached secrets."""
-    from build123d import Axis, ExportDXF, Unit, export_step, export_stl
+    from build123d import export_step, export_stl
 
     sanitized = _strip_build123d_imports(code)
     is_safe, safety_error = _validate_generated_code(sanitized)
@@ -1273,12 +1252,6 @@ def execute_generated_cad(code: str, output_type: str):
             mesh.apply_transform([[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]])
             mesh.export(str(glb))
             paths["glb"] = glb
-            if output_type in {"2d_vector", "1d_path"}:
-                dxf = Path(tmpdir) / "model.dxf"
-                exporter = ExportDXF(unit=Unit.MM)
-                exporter.add_shape(shape.edges())
-                exporter.write(str(dxf))
-                paths["dxf"] = dxf
             artifacts = {}
             for fmt, path in paths.items():
                 if path.stat().st_size > 50 * 1024 * 1024:
@@ -1318,7 +1291,7 @@ def generate_from_spec(payload: dict):
         if executed.get("success"):
             run_id = str(__import__("uuid").uuid4())
             urls = {}
-            content_types = {"stl": "model/stl", "step": "application/octet-stream", "dxf": "application/dxf"}
+            content_types = {"stl": "model/stl", "step": "application/octet-stream", "glb": "model/gltf-binary"}
             for fmt, artifact in executed["artifacts"].items():
                 urls[fmt] = _upload_to_supabase(f"runs/{run_id}/model.{fmt}", artifact, content_types[fmt])
             return {"success": True, "urls": urls, "generated_code": code, "model": model, "usage": usage}
@@ -1369,7 +1342,7 @@ def execute_and_publish(payload: dict):
     if not executed.get("success"):
         return executed
     run_id = str(__import__("uuid").uuid4())
-    content_types = {"stl": "model/stl", "step": "application/octet-stream", "glb": "model/gltf-binary", "dxf": "application/dxf"}
+    content_types = {"stl": "model/stl", "step": "application/octet-stream", "glb": "model/gltf-binary"}
     urls = {
         fmt: _upload_to_supabase(f"runs/{run_id}/model.{fmt}", artifact, content_types[fmt])
         for fmt, artifact in executed["artifacts"].items()
