@@ -10,10 +10,6 @@ pinned: false
 
 # NaturalCAD 2D
 
-<p align="center">
-  <img src="docs/assets/naturalcad-logo-current.jpg" alt="NaturalCAD logo" width="220" />
-</p>
-
 **NaturalCAD 2D** is the Hugging Face drafting lane for sketch/text to DXF, split apart from the main 3D product work.
 
 The current product direction is:
@@ -33,10 +29,6 @@ Current branch split posture:
 - this branch repurposes the HF app toward `text/sketch -> 2D DXF`
 
 NaturalCAD is still early, but the real work is no longer just a text-to-CAD toy. The product is being shaped toward useful multi-turn CAD generation and, over time, replacement-part reconstruction.
-
-<p align="center">
-  <img src="docs/assets/naturalcad-hero-reference.jpg" alt="NaturalCAD example output" width="680" />
-</p>
 
 ## Current app path
 
