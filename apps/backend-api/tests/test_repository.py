@@ -68,3 +68,38 @@ def test_attachment_reservation_is_bounded_atomically() -> None:
             project_id=project.id, session_id=session.session_id, content_type="image/png", size_bytes=10,
             storage_key="two", upload_url=None, max_active=1,
         )
+
+
+def test_legacy_spec_extracts_reverse_order_and_triplet_dimensions() -> None:
+    spec = derive_legacy_spec("Make a bracket 80 width with 50 height and 80x50x6 overall", "part", "3d_solid")
+    assert spec.dimensions["width"] == 80.0
+    assert spec.dimensions["height"] == 50.0
+    assert spec.dimensions["thickness"] == 6.0
+
+
+def test_legacy_spec_extracts_labeled_dimensions_with_units() -> None:
+    spec = derive_legacy_spec("diameter 12 mm tube adapter with length 40 mm and thickness 3.5", "part", "3d_solid")
+    assert spec.dimensions["diameter"] == 12.0
+    assert spec.dimensions["length"] == 40.0
+    assert spec.dimensions["thickness"] == 3.5
+
+
+def test_legacy_spec_captures_feature_constraints_and_family_hints() -> None:
+    spec = derive_legacy_spec(
+        "Make a symmetric wall bracket with 4 holes for M8 bolts and 0.2 mm clearance",
+        "part",
+        "3d_solid",
+    )
+    assert spec.semantic_part["category"] == "support_bracket"
+    assert spec.semantic_part["symmetry"] == "symmetric"
+    assert "wall_mount" in spec.semantic_part["interfaces"]
+    assert spec.family_hint["generation_mode"] == "extend"
+    assert any(feature["feature_type"] == "mounting_holes" for feature in spec.geometry["features"])
+    assert any(item["kind"] == "clearance" and item["value"] == 0.2 for item in spec.constraints)
+    assert any("fit-critical" in note.lower() for note in spec.notes)
+
+
+def test_legacy_spec_flags_missing_fit_critical_dimensions() -> None:
+    spec = derive_legacy_spec("tube adapter for a press fit shaft", "part", "3d_solid")
+    assert any("interface diameter" in item.lower() for item in spec.uncertainties)
+    assert any("tolerance or clearance" in item.lower() for item in spec.uncertainties)

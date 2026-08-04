@@ -33,6 +33,18 @@ class SupabaseRepo:
         return response.json() if response.content else None
 
     @staticmethod
+    def _jsonable(value: Any) -> Any:
+        if isinstance(value, PartSpec):
+            return value.model_dump()
+        if isinstance(value, ParameterControl):
+            return value.model_dump()
+        if isinstance(value, list):
+            return [SupabaseRepo._jsonable(item) for item in value]
+        if isinstance(value, dict):
+            return {key: SupabaseRepo._jsonable(item) for key, item in value.items()}
+        return value
+
+    @staticmethod
     def _dt(value: str) -> datetime:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
@@ -60,6 +72,11 @@ class SupabaseRepo:
 
     def check_and_consume_quota(self, session_id: str, *, max_runs: int, window_seconds: int) -> tuple[bool, int]:
         rows = self._request("POST", "rpc/nc_reserve_generation_quota", json={"p_session_id": session_id, "p_max_runs": max_runs, "p_window_seconds": window_seconds})
+        result = rows[0] if isinstance(rows, list) else rows
+        return bool(result["allowed"]), int(result["remaining"])
+
+    def check_and_consume_ip_quota(self, ip_hash: str, *, kind: str, max_events: int, window_seconds: int) -> tuple[bool, int]:
+        rows = self._request("POST", "rpc/nc_reserve_ip_quota", json={"p_ip_hash": ip_hash, "p_kind": kind, "p_max_events": max_events, "p_window_seconds": window_seconds})
         result = rows[0] if isinstance(rows, list) else rows
         return bool(result["allowed"]), int(result["remaining"])
 
@@ -103,12 +120,38 @@ class SupabaseRepo:
         rows = self._request("GET", "nc_generation_runs", params={"select": "*", "project_id": f"eq.{project_id}", "id": f"eq.{run_id}", "limit": "1"})
         return GenerationRunResponse(**rows[0]) if rows else None
 
+    def claim_run(self, project_id: str, run_id: str, *, stale_seconds: int) -> str | None:
+        """Atomically claim exclusive processing of a run via a conditional UPDATE.
+        Returns a claim token, or None if another worker holds a fresh claim."""
+        token = uuid.uuid4().hex
+        cutoff = (utc_now() - timedelta(seconds=stale_seconds)).isoformat()
+        rows = self._request(
+            "PATCH", "nc_generation_runs",
+            params={
+                "id": f"eq.{run_id}", "project_id": f"eq.{project_id}",
+                "or": f'(claimed_at.is.null,claimed_at.lt."{cutoff}")',
+            },
+            json={"claimed_at": utc_now().isoformat(), "claim_token": token},
+            prefer="return=representation",
+        )
+        return token if rows else None
+
+    def refresh_run_claim(self, project_id: str, run_id: str, token: str) -> bool:
+        """Heartbeat an existing claim. Returns False if the claim was stolen."""
+        rows = self._request(
+            "PATCH", "nc_generation_runs",
+            params={"id": f"eq.{run_id}", "project_id": f"eq.{project_id}", "claim_token": f"eq.{token}"},
+            json={"claimed_at": utc_now().isoformat()},
+            prefer="return=representation",
+        )
+        return bool(rows)
+
     def list_runs(self, project_id: str) -> list[GenerationRunResponse]:
         rows = self._request("GET", "nc_generation_runs", params={"select": "*", "project_id": f"eq.{project_id}", "order": "created_at.desc"})
         return [GenerationRunResponse(**row) for row in rows]
 
     def update_run(self, project_id: str, run_id: str, **updates: Any) -> GenerationRunResponse:
-        payload = {**updates, "updated_at": utc_now().isoformat()}
+        payload = {key: self._jsonable(value) for key, value in {**updates, "updated_at": utc_now().isoformat()}.items()}
         self._request("PATCH", "nc_generation_runs", params={"id": f"eq.{run_id}", "project_id": f"eq.{project_id}"}, json=payload, prefer="return=minimal")
         run = self.get_run(project_id, run_id)
         if not run:

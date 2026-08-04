@@ -16,7 +16,7 @@ const features = [
   },
   {
     title: 'Export-first workflow',
-    body: 'STEP and STL for fabrication, DXF for linework and laser workflows, with lineage per run.'
+    body: 'STEP and STL for fabrication, with lineage per run.'
   },
   {
     title: 'Enterprise controls ready',
@@ -27,7 +27,7 @@ const features = [
 const steps = [
   'Describe the object in plain language.',
   'NaturalCAD resolves intent into CAD-safe generation logic.',
-  'Review the model, then download STEP/STL/DXF artifacts.'
+  'Review the model, then download STEP/STL artifacts.'
 ];
 
 function inferSpec(prompt: string): SpecPreview {
@@ -127,7 +127,7 @@ export default function App() {
         <div className="pilot-tags">
           <span>API-first</span>
           <span>Audit trail</span>
-          <span>STEP/STL/DXF</span>
+          <span>STEP/STL</span>
           <span>Private deployment path</span>
         </div>
       </section>

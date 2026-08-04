@@ -3,67 +3,54 @@
 ## Minimum checklist
 
 - [ ] Gradio app runs cleanly from `apps/gradio-demo/app/main.py`
-- [ ] `requirements.txt` contains everything needed for Space runtime, including `build123d`
-- [ ] prompt-to-model flow works without requiring local-only paths that break in Space
+- [ ] `requirements.txt` contains everything needed for Space runtime for the 2D lane
+- [ ] prompt/image-to-model flow works without requiring local-only paths that break in Space
 - [ ] example prompts produce valid outputs
 - [ ] timeouts are in place
-- [ ] artifacts are bounded and not unbounded temp junk
+- [ ] artifacts are bounded and not unbounded temp junk (still open)
 - [ ] lightweight run logging is enabled
 - [ ] README explains local run and Space intent clearly
 
 ## MVP notes
 
 For public testing, the demo should degrade gracefully.
-If the backend is unavailable, the app should still be able to produce a simple local fallback result rather than fully dying.
+If the model call is unavailable, the app should still be able to produce a simple local fallback drawing rather than fully dying.
 
-For the lean MVP, backend use should be optional, not assumed. If `NATURALCAD_BACKEND_URL` is unset, the Space should stay usable without waiting on a dead localhost request.
-
-If the Hugging Face Space runtime cannot support the CAD dependency stack cleanly, keep the Space as the frontend and offload execution to a container or VM.
+For the lean MVP, backend use should be optional, not assumed.
+If the Hugging Face Space runtime cannot support the eventual model path cleanly, keep the Space as the frontend and offload only the model call.
 
 ## Current hosted setup
 
-Space env:
-- variable: `NATURALCAD_BACKEND_URL`
-- secret: `NATURALCAD_API_KEY`
-
-Backend host:
-- current recommended host: Modal web endpoint (`generate_cad_endpoint`)
-- endpoint method: `POST /`
-- backend requires header `x-api-key: <NATURALCAD_API_KEY>`
-- response should include `job_id`, `generated_code`, and artifact `urls`
-
-Worker env/secrets:
-- `OPENROUTER_API_KEY`
-- `OPENROUTER_MODEL` (optional)
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `SUPABASE_BUCKET`
-- `NATURALCAD_API_KEY`
-
 Runtime note:
-- the Space Docker image must include the native stack needed by `build123d` / `OCP`
-- final stabilization attempt uses a pure `python:3.10-slim` + `pip` runtime instead of the mixed Conda/OCP path
-- the goal is to let `build123d` resolve one coherent wheel stack directly, instead of mixing `conda` native packages with `pip` Python packages
-- current Dockerfile includes a `build123d` import smoke test during image build so broken native combinations fail earlier
+- current branch uses a lighter pure Python 2D stack instead of the older `build123d` Space path
+- keep the Space runtime as simple as possible: `gradio`, `ezdxf`, `pillow`, `httpx`
+- avoid hidden dependencies on local backend env or CAD-native desktop tooling
+
+Space envs to set:
+- `OPENROUTER_API_KEY` as a secret when live model calls should be enabled
+- `NATURALCAD_2D_MODEL` as an optional public env override for the 2D drafting model
+- `NATURALCAD_2D_MAX_PASSES=2` for a cost-bounded repair pass on shallow creative concepts
+- `OPENROUTER_TITLE=NaturalCAD 2D`
 
 ## Data to capture
 
 - timestamp
 - run id
-- prompt
-- mode
-- output type
-- geometry family
-- backend available or not
-- success or failure
-- runtime seconds
+- prompt length (do not log full private prompt text by default)
+- sketch image present or not
+- units
+- entity counts
+- fallback or model-assisted
+- success source: model, local demo fallback, or preserved prior scene
+- total and model runtime milliseconds
 - error string if any
 
 ## Security checks before publish
 
-- [ ] `NATURALCAD_API_KEY` is set on Space and Modal
-- [ ] backend endpoint rejects requests without `x-api-key`
-- [ ] rate limiting is active (IP + key)
-- [ ] prompt length caps enforced
-- [ ] generated code safety guard enabled
+- [ ] any remote model endpoint secret is set on Space
+- [ ] any remote model endpoint rejects unauthenticated requests
+- [ ] rate limiting is active if/when a remote model path is added
+- [x] prompt length caps enforced
+- [x] image upload capped at 10 MB
+- [x] Gradio queue bounded and concurrency limited
 - [ ] no tracked `artifacts/logs/*.jsonl`

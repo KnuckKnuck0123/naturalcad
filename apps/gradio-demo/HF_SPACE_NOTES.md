@@ -1,21 +1,37 @@
 # NaturalCAD HF Space Notes
 
 ## Current intent
-- Public-facing NaturalCAD app
-- build123d-backed execution loop
-- Noah will wire a service endpoint for LLM generation later
+- Public-facing NaturalCAD 2D app
+- sketch/image/text to editable DXF
+- lightweight Hugging Face test lane before deeper website integration
 
 ## Current prototype state
 - Gradio UI
-- real build123d execution
-- STL preview
-- STL + STEP downloads
+- text prompt, sketch image, or both
+- validated SVG preview
+- DXF and DrawingScene JSON downloads
+- versioned, portable DrawingScene 1.0 contract
+- stable entity IDs for refinement
+- polylines, circles, arcs, true obround slots, hatches, text, dimensions, and leaders
+- live OpenRouter model generation and refinement with explicit local fallback state
 - starter sample picker
-- prompt note field for future LLM integration
 - archived per-run artifacts under `artifacts/runs/`
 
+## Deployment target
+- Space: `noahtheboa/naturalcad-2d`
+- Host: https://noahtheboa-naturalcad-2d.hf.space
+- Required Space secret: `OPENROUTER_API_KEY`
+- Space variable: `NATURALCAD_2D_MODEL=anthropic/claude-opus-4.8`
+- Optional Space variable: `NATURALCAD_2D_MAX_PASSES=2` enables one depth-repair pass only when a creative scene fails validation
+
+## Verified locally
+- live text generation through `openai/gpt-4.1-mini`
+- live scene-aware refinement that preserved unchanged entity IDs
+- DXF reopen/audit with zero errors
+- contract and exporter regression tests
+
 ## Next likely steps
-- add endpoint config pattern for external LLM service
-- convert prompt note into real prompt-to-code flow
-- improve public-facing examples
-- add safe execution constraints for Spaces
+- deploy this prototype revision to the dedicated 2D Space
+- test one live sketch-image generation in the hosted environment
+- validate representative outputs in QCAD
+- add feedback controls and bounded artifact retention before broader public testing

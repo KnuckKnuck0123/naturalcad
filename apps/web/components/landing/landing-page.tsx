@@ -32,6 +32,11 @@ export function LandingPage() {
             <span>Iterate</span>
             <span>Export</span>
           </div>
+          <nav className="legal-footer">
+            <Link href="/terms">Terms</Link>
+            <Link href="/privacy">Privacy</Link>
+            <span>Beta</span>
+          </nav>
         </section>
       </div>
     </main>

@@ -2,28 +2,34 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VENV_DEFAULT="$HOME/.openclaw/workspace/.venvs/cadrender312"
+VENV_DEFAULT="$ROOT/.venv"
+LEGACY_VENV="$HOME/.openclaw/workspace/.venvs/cadrender312"
 VENV_PATH="${NATURALCAD_FRONTEND_VENV:-$VENV_DEFAULT}"
-BACKEND_ENV_PATH="$ROOT/apps/backend-api/.env"
 
-if [[ ! -x "$VENV_PATH/bin/python3" ]]; then
-  echo "NaturalCAD frontend venv not found at: $VENV_PATH" >&2
-  echo "Set NATURALCAD_FRONTEND_VENV=/path/to/venv if you want to use a different one." >&2
-  exit 1
-fi
-
-if [[ -z "${NATURALCAD_BACKEND_URL:-}" ]]; then
-  export NATURALCAD_BACKEND_URL="http://127.0.0.1:8010"
-fi
-
-if [[ -z "${NATURALCAD_API_KEY:-}" && -f "$BACKEND_ENV_PATH" ]]; then
-  backend_secret="$(grep '^API_SHARED_SECRET=' "$BACKEND_ENV_PATH" | tail -n 1 | cut -d= -f2-)"
-  if [[ -n "$backend_secret" ]]; then
-    export NATURALCAD_API_KEY="$backend_secret"
-  fi
+if [[ ! -x "$VENV_PATH/bin/python3" && -x "$LEGACY_VENV/bin/python3" ]]; then
+  VENV_PATH="$LEGACY_VENV"
 fi
 
 cd "$ROOT"
+
+if [[ ! -x "$VENV_PATH/bin/python3" ]]; then
+  PYTHON_BIN=""
+  for candidate in python3.12 python3.11 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      PYTHON_BIN="$candidate"
+      break
+    fi
+  done
+
+  if [[ -z "$PYTHON_BIN" ]]; then
+    echo "Could not find a usable Python interpreter to create the NaturalCAD frontend venv." >&2
+    exit 1
+  fi
+
+  echo "Creating NaturalCAD frontend venv at: $VENV_PATH"
+  "$PYTHON_BIN" -m venv "$VENV_PATH"
+fi
+
 source "$VENV_PATH/bin/activate"
 pip install -r requirements.txt
 exec python3 app.py
