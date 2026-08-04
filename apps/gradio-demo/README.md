@@ -5,9 +5,10 @@ Gradio MVP for the Hugging Face 2D drafting lane.
 ## Product promise
 
 - text prompt, sketch image, or both
-- generate a simple 2D drafting study
+- generate a validated, structured 2D drafting scene
+- refine the current drawing while preserving stable entity IDs
 - preview in-browser
-- download DXF
+- download DXF and the portable DrawingScene JSON
 
 Short UI note:
 
@@ -16,8 +17,7 @@ Short UI note:
 ## Current stack
 
 - Gradio for the HF-facing UI
-- internal drafting scene model in `app/main.py`
-- `shapely` for geometry-oriented helpers and bounds logic
+- versioned, UI-free DrawingScene contract in `app/drawing_core.py`
 - `ezdxf` for DXF authoring/export
 - direct OpenRouter model calls for the first real drafting pass
 - QCAD as the target validation environment for output quality
@@ -28,15 +28,32 @@ Short UI note:
 - accepts optional sketch image
 - accepts optional reference notes/dimensions
 - generates a simple drafting scene with:
-  - geometry
+  - polylines, circles, arcs, and true obround slots
   - hatch
   - centerline
   - dimensions
   - text
   - leader note
-- writes DXF into `artifacts/runs/`
-- logs lightweight run metadata into `artifacts/logs/runs.jsonl`
+- applies the `NOAH_URIU_2D_V1` layer hierarchy with colored CAD working layers and black plot styles
+- renders exact deterministic `ezdxf` hatch patterns in the SVG preview, including nested holes
+- reports a depth check when a creative concept is too sparse for the requested intent
+- writes DXF, SVG, and DrawingScene JSON into `artifacts/runs/`
+- logs timestamped run/source/runtime metadata into `artifacts/logs/runs.jsonl`
+- visibly labels model output, local demo fallback, and preserved-scene refinement states
 - falls back to a local deterministic scene builder if the model call is unavailable
+- preserves the prior validated scene when a refinement model call cannot run
+
+## Portable contract
+
+`DrawingScene 1.2` is intentionally independent of Gradio, OpenRouter, and the filesystem. Both the SVG preview and DXF exporter consume the same validated scene.
+
+This is the seam that will later move into the main product:
+
+- main app shared shell: conversation, attachments, history, projects
+- 2D workspace: DrawingScene JSON -> 2D preview + DXF/SVG export
+- 3D workspace: current part spec -> GLB/STEP/STL pipeline
+
+See `docs/drawing-scene-v1.md`.
 
 ## Environment
 
@@ -56,6 +73,8 @@ From the repo root:
 npm run frontend:local
 ```
 
+The helper script prefers a repo-local `.venv`, creates it automatically if needed, and still accepts `NATURALCAD_FRONTEND_VENV=/path/to/venv` if you want to override the environment path.
+
 Manual fallback:
 
 ```bash
@@ -67,7 +86,7 @@ Open `http://localhost:7860`.
 
 ## Next implementation targets
 
-- replace the current deterministic scene builder with a real model call
-- move prompt/image interpretation into a structured drafting scene schema
-- improve entity coverage and QCAD validation
-- remove DXF positioning from the main 3D product lane
+- exercise live text/image/refinement calls with `OPENROUTER_API_KEY`
+- run the three fixture prompts through QCAD and record output issues
+- add feedback controls and artifact-retention cleanup before public traffic
+- add the backend 2D worker adapter, then merge a 2D/3D workspace switcher into `apps/web`

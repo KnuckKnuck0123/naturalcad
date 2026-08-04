@@ -7,7 +7,7 @@
 - [ ] prompt/image-to-model flow works without requiring local-only paths that break in Space
 - [ ] example prompts produce valid outputs
 - [ ] timeouts are in place
-- [ ] artifacts are bounded and not unbounded temp junk
+- [ ] artifacts are bounded and not unbounded temp junk (still open)
 - [ ] lightweight run logging is enabled
 - [ ] README explains local run and Space intent clearly
 
@@ -23,7 +23,7 @@ If the Hugging Face Space runtime cannot support the eventual model path cleanly
 
 Runtime note:
 - current branch uses a lighter pure Python 2D stack instead of the older `build123d` Space path
-- keep the Space runtime as simple as possible: `gradio`, `ezdxf`, `shapely`, `pillow`
+- keep the Space runtime as simple as possible: `gradio`, `ezdxf`, `pillow`, `httpx`
 - avoid hidden dependencies on local backend env or CAD-native desktop tooling
 
 Space envs to set:
@@ -35,13 +35,13 @@ Space envs to set:
 
 - timestamp
 - run id
-- prompt
+- prompt length (do not log full private prompt text by default)
 - sketch image present or not
 - units
 - entity counts
 - fallback or model-assisted
-- success or failure
-- runtime seconds
+- success source: model, local demo fallback, or preserved prior scene
+- total and model runtime milliseconds
 - error string if any
 
 ## Security checks before publish
@@ -49,5 +49,7 @@ Space envs to set:
 - [ ] any remote model endpoint secret is set on Space
 - [ ] any remote model endpoint rejects unauthenticated requests
 - [ ] rate limiting is active if/when a remote model path is added
-- [ ] prompt length caps enforced
+- [x] prompt length caps enforced
+- [x] image upload capped at 10 MB
+- [x] Gradio queue bounded and concurrency limited
 - [ ] no tracked `artifacts/logs/*.jsonl`

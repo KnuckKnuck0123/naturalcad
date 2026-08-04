@@ -20,7 +20,8 @@ The current product direction is:
 ## Use it
 
 - Main website/app frontend lives in `apps/web`
-- Legacy public Hugging Face demo still exists at: https://huggingface.co/spaces/kNOWare/naturalcad
+- Dedicated NaturalCAD 2D prototype: https://huggingface.co/spaces/noahtheboa/naturalcad-2d
+- Legacy NaturalCAD Space: https://huggingface.co/spaces/kNOWare/naturalcad
 - Use this repo if you want to run locally, self-host, or continue product development
 
 Current branch split posture:
@@ -78,7 +79,9 @@ Helper script:
 - `scripts/run-local-frontend.sh`
 
 Notes:
-- the frontend helper expects a working Python venv; default path is `~/.openclaw/workspace/.venvs/cadrender312`
+- the frontend helper now prefers a repo-local `.venv`
+- if `.venv` does not exist yet, the helper will create it automatically with `python3.12`, `python3.11`, or `python3`
+- if the old `~/.openclaw/workspace/.venvs/cadrender312` exists, the helper still falls back to it for compatibility
 - if you want a different frontend venv, set `NATURALCAD_FRONTEND_VENV=/path/to/venv`
 - this branch's HF app currently runs as a local DXF generator and previewer without needing the 3D backend path
 
