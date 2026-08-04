@@ -13,16 +13,17 @@ const PADDING = 56;
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 20;
 
-/** CAD drafting palette — white geometry on near-black, classic colored linetypes. */
-const LAYER_GEOMETRY = "#f0f0f0";
+/** CAD drafting palette — bright white geometry on pure black, classic colored linetypes. */
+const LAYER_GEOMETRY = "#ffffff";
 const LAYER_CENTER = "#00e5ff";    // cyan centerlines (AutoCAD classic)
 const LAYER_HATCH = "#5b6b86";
 const LAYER_DIMENSIONS = "#ffb300"; // amber dimensions
 const LAYER_TEXT = "#e2e8f0";
 const LAYER_ANNOTATION = "#00e676"; // green annotations
 
-const GRID_COLOR = "#1a2030";
-const ORIGIN_COLOR = "#00e5ff";
+const GRID_MINOR = "#11161f";
+const GRID_MAJOR = "#1e2738";
+const ORIGIN_COLOR = "#ff3030";    // red origin marker
 
 function colorForLayer(layer: string): string {
   const key = layer.toUpperCase();
@@ -42,15 +43,15 @@ function strokeDasharrayFor(layer: string): string | undefined {
   return undefined;
 }
 
-/** Per-layer stroke weight — geometry reads heaviest, annotations lightest. */
+/** Per-layer stroke weight — heavy geometry, thin construction, dim hierarchy reads. */
 function strokeWidthFor(layer: string): number {
   const upper = layer.toUpperCase();
-  if (upper.includes("CENTER")) return 1.0;
-  if (upper.includes("HATCH")) return 0.8;
-  if (upper.includes("DIMENSION")) return 1.2;
-  if (upper.includes("ANNOTATION") || upper.includes("LEADER")) return 1.2;
-  if (upper.includes("TEXT") || upper.includes("LABEL")) return 1.0;
-  return 2.2;  // GEOMETRY — heaviest, the silhouette reads first
+  if (upper.includes("CENTER")) return 0.6;
+  if (upper.includes("HATCH")) return 0.5;
+  if (upper.includes("DIMENSION")) return 1.0;
+  if (upper.includes("ANNOTATION") || upper.includes("LEADER")) return 1.0;
+  if (upper.includes("TEXT") || upper.includes("LABEL")) return 0.8;
+  return 3.0;  // GEOMETRY — heavy silhouette reads first
 }
 
 interface DraftingViewport2DProps {
@@ -211,6 +212,16 @@ export function DraftingViewport2D({
         <path d={`M 14 ${VIEW_SIZE - 34} L 14 ${VIEW_SIZE - 14} L 34 ${VIEW_SIZE - 14}`} />
         <path d={`M ${VIEW_SIZE - 34} ${VIEW_SIZE - 14} L ${VIEW_SIZE - 14} ${VIEW_SIZE - 14} L ${VIEW_SIZE - 14} ${VIEW_SIZE - 34}`} />
       </g>
+
+      {/* UCS icon — bottom-left, X=red, Y=green, like AutoCAD/Rhino viewport */}
+      <g transform="translate(38, 38)">
+        <line x1="0" y1="0" x2="20" y2="0" stroke="#ff3030" strokeWidth="2" />
+        <line x1="0" y1="0" x2="0" y2="-20" stroke="#00e676" strokeWidth="2" />
+        <circle cx="0" cy="0" r="2" fill="#94a3b8" />
+        <text x="24" y="4" fontSize="11" fill="#ff3030" fontFamily="ui-monospace, monospace">X</text>
+        <text x="-3" y="-24" fontSize="11" fill="#00e676" fontFamily="ui-monospace, monospace">Y</text>
+      </g>
+
       <text x={VIEW_SIZE - 22} y={VIEW_SIZE - 22} fontSize="12" fill="#475569" textAnchor="end" fontFamily="ui-monospace, monospace">
         {(zoom * 100).toFixed(0)}%
       </text>
@@ -232,10 +243,12 @@ function renderScene(scene: DrawingScene) {
 
   // Grid spacing in world units — pick a "nice" step from the bounds span.
   const spanX = bounds.maxX - bounds.minX;
-  const niceStep = niceGridStep(spanX / 10);
-  const grid = gridLines(bounds, niceStep);
+  const majorStep = niceGridStep(spanX / 8);
+  const minorStep = majorStep / 5;
 
   const origin = project([0, 0]);
+  const gridLinesMajor = gridLines(bounds, majorStep);
+  const gridLinesMinor = gridLines(bounds, minorStep);
 
   return (
     <g>
@@ -249,17 +262,23 @@ function renderScene(scene: DrawingScene) {
       </defs>
 
       <g clipPath="url(#drawing-clip)">
-        {/* Dot grid in screen space, sparse, low-contrast */}
-        {grid.map(([wx, wy], i) => {
+        {/* Minor grid — very faint construction lines */}
+        {gridLinesMinor.map(([wx, wy], i) => {
           const [sx, sy] = project([wx, wy]);
-          return <circle key={`g${i}`} cx={num(sx)} cy={num(sy)} r="0.8" fill={GRID_COLOR} />;
+          return <circle key={`gm${i}`} cx={num(sx)} cy={num(sy)} r="0.4" fill={GRID_MINOR} />;
+        })}
+        {/* Major grid — slightly brighter every 5th line */}
+        {gridLinesMajor.map(([wx, wy], i) => {
+          const [sx, sy] = project([wx, wy]);
+          return <circle key={`gM${i}`} cx={num(sx)} cy={num(sy)} r="0.9" fill={GRID_MAJOR} />;
         })}
 
-        {/* Origin marker — UCS-style crosshair */}
-        <g stroke={ORIGIN_COLOR} strokeWidth="1.2" opacity="0.7">
-          <line x1={num(origin[0] - 10)} y1={num(origin[1])} x2={num(origin[0] + 10)} y2={num(origin[1])} />
-          <line x1={num(origin[0])} y1={num(origin[1] - 10)} x2={num(origin[0])} y2={num(origin[1] + 10)} />
-          <circle cx={num(origin[0])} cy={num(origin[1])} r="2.5" fill="none" />
+        {/* Origin marker — red UCS crosshair, like a CAD origin flag */}
+        <g stroke={ORIGIN_COLOR} strokeWidth="1.4" opacity="0.85">
+          <line x1={num(origin[0] - 14)} y1={num(origin[1])} x2={num(origin[0] + 14)} y2={num(origin[1])} />
+          <line x1={num(origin[0])} y1={num(origin[1] - 14)} x2={num(origin[0])} y2={num(origin[1] + 14)} />
+          <circle cx={num(origin[0])} cy={num(origin[1])} r="3" fill="none" />
+          <circle cx={num(origin[0])} cy={num(origin[1])} r="0.8" fill={ORIGIN_COLOR} stroke="none" />
         </g>
 
         {scene.hatches.map((hatch) => {
