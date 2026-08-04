@@ -645,6 +645,7 @@ def scene_quality_report(scene: DrawingScene, *, intent_mode: str = "TECHNICAL_D
         for entity in collection
     }
     issues: list[str] = []
+    annotation_count = len(scene.texts) + len(scene.dimensions) + len(scene.leaders)
     if intent_mode == "CREATIVE_CONCEPT":
         if len(scene.polylines) < 32:
             issues.append("Creative scene has fewer than 32 editable polylines")
@@ -654,13 +655,28 @@ def scene_quality_report(scene: DrawingScene, *, intent_mode: str = "TECHNICAL_D
             issues.append("Creative scene has fewer than two hatch or shadow regions")
         if len(used_layers) < 3:
             issues.append("Creative scene uses fewer than three semantic CAD layers")
+        if scene.dimensions:
+            issues.append("Conceptual scene includes unrequested dimension objects")
+        if len(scene.leaders) > 4:
+            issues.append("Conceptual scene uses more than four leaders")
+        if len(scene.texts) > 2:
+            issues.append("Conceptual scene uses more than two free text labels")
     else:
         if len(used_layers) < 2:
             issues.append("Technical scene uses fewer than two semantic CAD layers")
+        if len(scene.dimensions) > 8:
+            issues.append("Technical scene uses more than eight dimensions")
+        if len(scene.leaders) > 4:
+            issues.append("Technical scene uses more than four leaders")
+        if len(scene.texts) > 6:
+            issues.append("Technical scene uses more than six free text labels")
+    if annotation_count > 16:
+        issues.append("Scene contains more than sixteen annotation objects")
     return {
         "status": "pass" if not issues else "needs_refinement",
         "issues": issues,
         "geometry_points": geometry_points,
+        "annotation_count": annotation_count,
         "used_layers": sorted(used_layers),
         "standard_profile": scene.standard_profile,
     }
@@ -922,6 +938,14 @@ def _preview_hatch_segments(
     ], simplified
 
 
+def _dimension_text(entity: LinearDimensionEntity, units: str) -> str:
+    if entity.text:
+        return entity.text
+    length = math.dist(entity.start, entity.end)
+    value = f"{length:.2f}".rstrip("0").rstrip(".")
+    return f"{value} {units}"
+
+
 def render_svg(
     scene: DrawingScene,
     *,
@@ -1056,7 +1080,8 @@ def render_svg(
         layer = _svg_layer_style(scene, dimension.layer)
         if plot_mode and not layer.plot:
             continue
-        p1, p2 = map_point(dimension.start), map_point(dimension.end)
+        source_p1, source_p2 = map_point(dimension.start), map_point(dimension.end)
+        p1, p2 = source_p1, source_p2
         offset = dimension.offset * scale
         if abs(dimension.angle % 180 - 90) < 0.01:
             p1, p2 = (p1[0] + offset, p1[1]), (p2[0] + offset, p2[1])
@@ -1066,8 +1091,27 @@ def render_svg(
             scene, dimension.layer, plot_mode=plot_mode, monochrome=monochrome,
         )
         dash = f' stroke-dasharray="{dash_pattern}"' if dash_pattern else ""
-        parts.append(f'<line data-entity-id="{html.escape(dimension.id)}" data-layer="{html.escape(dimension.layer)}" data-role="{html.escape(layer.semantic_role)}" x1="{p1[0]:.2f}" y1="{p1[1]:.2f}" x2="{p2[0]:.2f}" y2="{p2[1]:.2f}" stroke="{color}" stroke-width="{stroke_width:.2f}"{dash}/>')
-        parts.append(f'<text x="{(p1[0] + p2[0]) / 2:.2f}" y="{(p1[1] + p2[1]) / 2 - 6:.2f}" font-size="16" fill="{color}" text-anchor="middle">{html.escape(dimension.text or "")}</text>')
+        common = (
+            f'data-entity-id="{html.escape(dimension.id)}" data-layer="{html.escape(dimension.layer)}" '
+            f'data-role="{html.escape(layer.semantic_role)}" data-annotation-kind="dimension"'
+        )
+        parts.append(
+            f'<g {common} stroke="{color}" fill="{color}" '
+            'font-family="ui-monospace, SFMono-Regular, Menlo, monospace">'
+            f'<line x1="{source_p1[0]:.2f}" y1="{source_p1[1]:.2f}" x2="{p1[0]:.2f}" y2="{p1[1]:.2f}" '
+            f'stroke-width="0.7" opacity="0.65"/>'
+            f'<line x1="{source_p2[0]:.2f}" y1="{source_p2[1]:.2f}" x2="{p2[0]:.2f}" y2="{p2[1]:.2f}" '
+            f'stroke-width="0.7" opacity="0.65"/>'
+            f'<line x1="{p1[0]:.2f}" y1="{p1[1]:.2f}" x2="{p2[0]:.2f}" y2="{p2[1]:.2f}" '
+            f'stroke-width="{stroke_width:.2f}"{dash}/>'
+            f'<path d="M {p1[0] - 4:.2f},{p1[1] + 4:.2f} L {p1[0] + 4:.2f},{p1[1] - 4:.2f} '
+            f'M {p2[0] - 4:.2f},{p2[1] + 4:.2f} L {p2[0] + 4:.2f},{p2[1] - 4:.2f}" '
+            f'fill="none" stroke-width="{max(0.9, stroke_width):.2f}"/>'
+            f'<text x="{(p1[0] + p2[0]) / 2:.2f}" y="{(p1[1] + p2[1]) / 2 - 7:.2f}" '
+            f'font-size="13" fill="{color}" stroke="{field}" stroke-width="5" paint-order="stroke" '
+            f'text-anchor="middle" letter-spacing="0.35">{html.escape(_dimension_text(dimension, scene.units))}</text>'
+            '</g>'
+        )
     for leader in scene.leaders:
         layer = _svg_layer_style(scene, leader.layer)
         if plot_mode and not layer.plot:
@@ -1078,9 +1122,35 @@ def render_svg(
             scene, leader.layer, plot_mode=plot_mode, monochrome=monochrome,
         )
         dash = f' stroke-dasharray="{dash_pattern}"' if dash_pattern else ""
-        parts.append(f'<polyline data-entity-id="{html.escape(leader.id)}" data-layer="{html.escape(leader.layer)}" data-role="{html.escape(layer.semantic_role)}" points="{points}" fill="none" stroke="{color}" stroke-width="{stroke_width:.2f}"{dash}/>')
         x, y = mapped[-1]
-        parts.append(f'<text x="{x + 8:.2f}" y="{y - 8:.2f}" font-size="15" fill="{color}">{html.escape(leader.text)}</text>')
+        landing_direction = -1 if x > size * 0.68 else 1
+        landing_end = x + landing_direction * 24
+        text_x = landing_end + landing_direction * 6
+        anchor = "end" if landing_direction < 0 else "start"
+        arrow = ""
+        if len(mapped) >= 2:
+            tip, next_point = mapped[0], mapped[1]
+            dx, dy = next_point[0] - tip[0], next_point[1] - tip[1]
+            magnitude = math.hypot(dx, dy)
+            if magnitude > 1e-6:
+                ux, uy = dx / magnitude, dy / magnitude
+                px, py = -uy, ux
+                base_x, base_y = tip[0] + ux * 9, tip[1] + uy * 9
+                arrow = (
+                    f'<path d="M {tip[0]:.2f},{tip[1]:.2f} L {base_x + px * 3.5:.2f},{base_y + py * 3.5:.2f} '
+                    f'L {base_x - px * 3.5:.2f},{base_y - py * 3.5:.2f} Z" fill="{color}" stroke="none"/>'
+                )
+        parts.append(
+            f'<g data-entity-id="{html.escape(leader.id)}" data-layer="{html.escape(leader.layer)}" '
+            f'data-role="{html.escape(layer.semantic_role)}" data-annotation-kind="leader" '
+            'font-family="ui-monospace, SFMono-Regular, Menlo, monospace">'
+            f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="{stroke_width:.2f}"{dash}/>'
+            f'{arrow}<line x1="{x:.2f}" y1="{y:.2f}" x2="{landing_end:.2f}" y2="{y:.2f}" '
+            f'stroke="{color}" stroke-width="{stroke_width:.2f}"/>'
+            f'<text x="{text_x:.2f}" y="{y - 5:.2f}" font-size="12" fill="{color}" stroke="{field}" '
+            f'stroke-width="5" paint-order="stroke" text-anchor="{anchor}" letter-spacing="0.35">'
+            f'{html.escape(leader.text)}</text></g>'
+        )
     for text_entity in scene.texts:
         layer = _svg_layer_style(scene, text_entity.layer)
         if plot_mode and not layer.plot:
@@ -1089,8 +1159,15 @@ def render_svg(
         color = _svg_layer_color(
             scene, text_entity.layer, plot_mode=plot_mode, monochrome=monochrome,
         )
-        font_size = max(10.0, min(36.0, text_entity.height * scale))
-        parts.append(f'<text data-entity-id="{html.escape(text_entity.id)}" data-layer="{html.escape(text_entity.layer)}" data-role="{html.escape(layer.semantic_role)}" x="{x:.2f}" y="{y:.2f}" font-size="{font_size:.2f}" fill="{color}">{html.escape(text_entity.text)}</text>')
+        font_size = max(10.0, min(24.0, text_entity.height * scale))
+        anchor = "end" if x > size - 120 else "start"
+        parts.append(
+            f'<text data-entity-id="{html.escape(text_entity.id)}" data-layer="{html.escape(text_entity.layer)}" '
+            f'data-role="{html.escape(layer.semantic_role)}" data-annotation-kind="text" '
+            f'x="{x:.2f}" y="{y:.2f}" font-size="{font_size:.2f}" fill="{color}" stroke="{field}" '
+            f'stroke-width="5" paint-order="stroke" text-anchor="{anchor}" letter-spacing="0.4" '
+            f'font-family="ui-monospace, SFMono-Regular, Menlo, monospace">{html.escape(text_entity.text)}</text>'
+        )
     if not plot_mode:
         parts.extend([
             '<g stroke="#ffffff" stroke-width="1.4" fill="#ffffff" opacity="0.9" '
@@ -1102,8 +1179,6 @@ def render_svg(
             '<g stroke="#475569" stroke-width="1" fill="none">'
             '<path d="M 14 34 L 14 14 L 34 14 M 826 14 L 846 14 L 846 34 '
             'M 14 826 L 14 846 L 34 846 M 826 846 L 846 846 L 846 826"/></g>',
-            f'<text x="824" y="824" fill="#475569" text-anchor="end" font-size="11" '
-            f'font-family="ui-monospace, SFMono-Regular, Menlo, monospace">{html.escape(scene.title)}</text>',
         ])
     parts.append("</svg>")
     return "".join(parts)

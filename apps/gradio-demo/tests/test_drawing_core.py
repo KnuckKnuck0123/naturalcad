@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from xml.etree import ElementTree
 
 import ezdxf
 import pytest
@@ -398,3 +399,37 @@ def test_creative_quality_gate_reports_shallow_and_deep_scenes() -> None:
     )
     report = scene_quality_report(deep, intent_mode="CREATIVE_CONCEPT")
     assert report["status"] == "pass"
+
+
+def test_annotations_render_with_cad_ticks_landings_and_text_knockouts() -> None:
+    scene = scene_from_payload(
+        {
+            "polylines": [{"points": [[0, 0], [20, 0]]}],
+            "dimensions": [{"id": "length", "start": [0, 0], "end": [20, 0], "offset": 5}],
+            "leaders": [{"id": "callout", "points": [[10, 0], [24, 8]], "text": "CUT EDGE"}],
+            "texts": [{"id": "title", "text": "DETAIL A", "insert": [0, 12], "height": 2}],
+        }
+    )
+    svg = render_svg(scene)
+    ElementTree.fromstring(svg)
+    assert 'data-annotation-kind="dimension"' in svg
+    assert 'data-annotation-kind="leader"' in svg
+    assert 'data-annotation-kind="text"' in svg
+    assert "20 mm" in svg
+    assert 'paint-order="stroke"' in svg
+    assert "ui-monospace" in svg
+
+
+def test_annotation_quality_gate_flags_overloaded_technical_scene() -> None:
+    scene = scene_from_payload(
+        {
+            "polylines": [{"points": [[0, 0], [20, 0]]}],
+            "dimensions": [
+                {"start": [0, index], "end": [20, index], "offset": 5}
+                for index in range(9)
+            ],
+        }
+    )
+    report = scene_quality_report(scene, intent_mode="TECHNICAL_DRAFT")
+    assert report["status"] == "needs_refinement"
+    assert "Technical scene uses more than eight dimensions" in report["issues"]

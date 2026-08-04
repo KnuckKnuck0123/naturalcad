@@ -36,6 +36,8 @@ def test_model_prompt_requires_uriu_layers_and_depth_floor() -> None:
     assert '"standard_profile": "NOAH_URIU_2D_V1"' in MODEL_SYSTEM_PROMPT
     assert "A-2D::A-DETAIL::A-DETAIL 06" in MODEL_SYSTEM_PROMPT
     assert "fewer than 32 polylines" in MODEL_SYSTEM_PROMPT
+    assert "Annotation discipline is mandatory" in MODEL_SYSTEM_PROMPT
+    assert "Use at most four leaders" in MODEL_SYSTEM_PROMPT
 
 
 def _response(scene: dict, *, prompt_tokens: int, completion_tokens: int) -> dict:

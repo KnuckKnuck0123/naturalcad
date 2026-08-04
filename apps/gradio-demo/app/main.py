@@ -116,6 +116,11 @@ Rules:
 - Count the entities before returning. A complex concept with fewer than 32 polylines or fewer than 2 hatches is incomplete and must be deepened before output.
 - For technical drawings, preserve stated dimensions and do not invent fit-critical or code-compliance claims.
 - If details are uncertain, preserve the subject's defining structure in geometry and note only assumptions that materially help the drawing.
+- Annotation discipline is mandatory. Geometry must carry the drawing; never use labels or notes to compensate for missing linework.
+- For conceptual drawings, omit dimensions, leaders, and explanatory notes unless explicitly requested. Use at most one short title outside the geometry field.
+- For technical drawings, include only requested or essential overall dimensions: normally 2-6 dimensions, no duplicates, and no closed dimension chains. Align related dimensions into one or two consistent offset bands outside the object.
+- Use at most four leaders. Keep each leader note under six words, place its text outside dense geometry, use a short horizontal landing, and avoid crossing other leaders or dimensions.
+- Use at most six free text labels. Do not place text over hatch, centerlines, silhouettes, or other text. Keep abbreviations and capitalization consistent.
 - Before returning JSON, verify that the subject is recognizable, linework fills the drawing field, hatches clarify depth/material, and no unrelated template geometry is present.
 - Do not include markdown fences, prose, comments, or explanations."""
 

@@ -38,6 +38,7 @@ Short UI note:
 - preserves working colors and black plot styles in the portable scene and DXF metadata
 - renders exact deterministic `ezdxf` hatch patterns in the SVG preview, including nested holes
 - reports a depth check when a creative concept is too sparse for the requested intent
+- limits annotation density and renders aligned dimension bands, CAD ticks, leader arrowheads/landings, and monospaced text knockouts
 - writes DXF, SVG, and DrawingScene JSON into `artifacts/runs/`
 - logs timestamped run/source/runtime metadata into `artifacts/logs/runs.jsonl`
 - visibly labels model output, local demo fallback, and preserved-scene refinement states
