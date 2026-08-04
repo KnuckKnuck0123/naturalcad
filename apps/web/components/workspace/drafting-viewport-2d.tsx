@@ -23,7 +23,6 @@ const LAYER_ANNOTATION = "#00e676"; // green annotations
 
 const GRID_MINOR = "#11161f";
 const GRID_MAJOR = "#1e2738";
-const ORIGIN_COLOR = "#ff3030";    // red origin marker
 
 function colorForLayer(layer: string): string {
   const key = layer.toUpperCase();
@@ -213,13 +212,15 @@ export function DraftingViewport2D({
         <path d={`M ${VIEW_SIZE - 34} ${VIEW_SIZE - 14} L ${VIEW_SIZE - 14} ${VIEW_SIZE - 14} L ${VIEW_SIZE - 14} ${VIEW_SIZE - 34}`} />
       </g>
 
-      {/* UCS icon — bottom-left, X=red, Y=green, like AutoCAD/Rhino viewport */}
-      <g transform="translate(38, 38)">
-        <line x1="0" y1="0" x2="20" y2="0" stroke="#ff3030" strokeWidth="2" />
-        <line x1="0" y1="0" x2="0" y2="-20" stroke="#00e676" strokeWidth="2" />
-        <circle cx="0" cy="0" r="2" fill="#94a3b8" />
-        <text x="24" y="4" fontSize="11" fill="#ff3030" fontFamily="ui-monospace, monospace">X</text>
-        <text x="-3" y="-24" fontSize="11" fill="#00e676" fontFamily="ui-monospace, monospace">Y</text>
+      {/* UCS icon — bottom-left, white arrows, X and Y labels */}
+      <g transform="translate(38, 38)" stroke="#ffffff" strokeWidth="1.6" fill="#ffffff">
+        <line x1="0" y1="0" x2="20" y2="0" />
+        <polygon points="20,0 16,-3 16,3" fill="#ffffff" stroke="none" />
+        <line x1="0" y1="0" x2="0" y2="-20" />
+        <polygon points="0,-20 -3,-16 3,-16" fill="#ffffff" stroke="none" />
+        <circle cx="0" cy="0" r="1.5" fill="none" stroke="#ffffff" />
+        <text x="24" y="4" fontSize="11" fill="#ffffff" stroke="none" fontFamily="ui-monospace, monospace">X</text>
+        <text x="-4" y="-24" fontSize="11" fill="#ffffff" stroke="none" fontFamily="ui-monospace, monospace">Y</text>
       </g>
 
       <text x={VIEW_SIZE - 22} y={VIEW_SIZE - 22} fontSize="12" fill="#475569" textAnchor="end" fontFamily="ui-monospace, monospace">
@@ -246,7 +247,6 @@ function renderScene(scene: DrawingScene) {
   const majorStep = niceGridStep(spanX / 8);
   const minorStep = majorStep / 5;
 
-  const origin = project([0, 0]);
   const gridLinesMajor = gridLines(bounds, majorStep);
   const gridLinesMinor = gridLines(bounds, minorStep);
 
@@ -272,14 +272,6 @@ function renderScene(scene: DrawingScene) {
           const [sx, sy] = project([wx, wy]);
           return <circle key={`gM${i}`} cx={num(sx)} cy={num(sy)} r="0.9" fill={GRID_MAJOR} />;
         })}
-
-        {/* Origin marker — red UCS crosshair, like a CAD origin flag */}
-        <g stroke={ORIGIN_COLOR} strokeWidth="1.4" opacity="0.85">
-          <line x1={num(origin[0] - 14)} y1={num(origin[1])} x2={num(origin[0] + 14)} y2={num(origin[1])} />
-          <line x1={num(origin[0])} y1={num(origin[1] - 14)} x2={num(origin[0])} y2={num(origin[1] + 14)} />
-          <circle cx={num(origin[0])} cy={num(origin[1])} r="3" fill="none" />
-          <circle cx={num(origin[0])} cy={num(origin[1])} r="0.8" fill={ORIGIN_COLOR} stroke="none" />
-        </g>
 
         {scene.hatches.map((hatch) => {
           const points = hatch.boundary.map((point) => project(point).map(num).join(",")).join(" ");
