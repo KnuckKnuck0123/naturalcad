@@ -561,6 +561,142 @@ result = p.part
 """
 
 
+# ---------------------------------------------------------------------------
+# DrawingScene 1.0 builder — introspects a build123d shape into the portable
+# 2D wire contract. Only invoked for output_type == "2d_vector".
+# ---------------------------------------------------------------------------
+
+_Z_TOL = 1e-3
+_PT_TOL = 1e-4
+
+_SCENE_LAYERS = [
+    {"name": "GEOMETRY", "color": 7, "linetype": "CONTINUOUS"},
+    {"name": "CENTER", "color": 4, "linetype": "CENTER"},
+    {"name": "DIMENSIONS", "color": 2, "linetype": "CONTINUOUS"},
+    {"name": "TEXT", "color": 3, "linetype": "CONTINUOUS"},
+    {"name": "ANNOTATION", "color": 6, "linetype": "CONTINUOUS"},
+]
+
+
+def _pt_eq_2d(a, b, tol=_PT_TOL):
+    return abs(a[0] - b[0]) < tol and abs(a[1] - b[1]) < tol
+
+
+def _chain_line_segments(segments):
+    """Greedily chain ordered line segments into connected polylines.
+
+    ``segments`` is a list of ``(start_xy, end_xy)`` tuples. Returns a list of
+    ``(points, closed)`` chains.
+    """
+    chains = []
+    remaining = list(segments)
+    while remaining:
+        s, e = remaining.pop(0)
+        chain = [s, e]
+        changed = True
+        while changed:
+            changed = False
+            for i in range(len(remaining)):
+                s2, e2 = remaining[i]
+                if _pt_eq_2d(chain[-1], s2):
+                    chain.append(e2); remaining.pop(i); changed = True; break
+                if _pt_eq_2d(chain[-1], e2):
+                    chain.append(s2); remaining.pop(i); changed = True; break
+                if _pt_eq_2d(chain[0], e2):
+                    chain.insert(0, s2); remaining.pop(i); changed = True; break
+                if _pt_eq_2d(chain[0], s2):
+                    chain.insert(0, e2); remaining.pop(i); changed = True; break
+        closed = len(chain) >= 3 and _pt_eq_2d(chain[0], chain[-1])
+        if closed:
+            chain = chain[:-1]
+        chains.append((chain, closed))
+    return chains
+
+
+def build_drawing_scene(shape, units="mm"):
+    """Introspect a build123d shape and return a DrawingScene 1.0 dict.
+
+    Extracts edges lying on the XY plane (z≈0) — the original sketch profile of
+    a 1 mm-extruded 2D part — and maps them to polyline/circle/arc entities.
+    Returns ``None`` when no planar edges are found.
+    """
+    import math
+
+    lines = []
+    circles = []
+    arcs = []
+    for edge in shape.edges():
+        try:
+            start_3d = edge.start
+            end_3d = edge.end
+            if abs(start_3d.Z) > _Z_TOL or abs(end_3d.Z) > _Z_TOL:
+                continue
+        except Exception:
+            continue
+        s = (start_3d.X, start_3d.Y)
+        e = (end_3d.X, end_3d.Y)
+        gt = edge.geom_type()
+        if gt == "LINE":
+            lines.append((s, e))
+        elif gt == "CIRCLE":
+            try:
+                c = edge.center
+                circles.append({
+                    "id": f"circle_{len(circles)+1:03d}",
+                    "center": [c.X, c.Y],
+                    "radius": edge.radius,
+                    "layer": "GEOMETRY",
+                })
+            except Exception:
+                pass
+        elif gt == "ARC":
+            try:
+                c = edge.center
+                r = edge.radius
+                start_angle = math.degrees(math.atan2(s[1] - c.Y, s[0] - c.X))
+                end_angle = math.degrees(math.atan2(e[1] - c.Y, e[0] - c.X))
+                arcs.append({
+                    "id": f"arc_{len(arcs)+1:03d}",
+                    "center": [c.X, c.Y],
+                    "radius": r,
+                    "start_angle": start_angle,
+                    "end_angle": end_angle,
+                    "layer": "GEOMETRY",
+                })
+            except Exception:
+                pass
+
+    polylines = []
+    for points, closed in _chain_line_segments(lines):
+        polylines.append({
+            "id": f"poly_{len(polylines)+1:03d}",
+            "points": [[float(p[0]), float(p[1])] for p in points],
+            "layer": "GEOMETRY",
+            "closed": closed,
+        })
+
+    entities = polylines or circles or arcs
+    if not entities:
+        return None
+
+    return {
+        "title": "Generated 2D profile",
+        "units": units,
+        "schema_version": "1.0",
+        "coordinate_system": "XY_RIGHT_HANDED",
+        "layers": _SCENE_LAYERS,
+        "polylines": polylines,
+        "circles": circles,
+        "arcs": arcs,
+        "slots": [],
+        "hatches": [],
+        "texts": [],
+        "dimensions": [],
+        "leaders": [],
+        "reference_note": "",
+    }
+
+
 @app.function(
     image=image,
     gpu="T4",
@@ -803,6 +939,15 @@ def generate_cad(prompt: str, mode: str = "part", output_type: str = "3d_solid")
                     urls[fmt] = _upload_to_supabase(storage_key, file_bytes, content_type)
                 except Exception as e:
                     _log_error(f"Upload error for {fmt}: {e}")
+
+            if output_type == "2d_vector":
+                scene = build_drawing_scene(shape, units="mm")
+                if scene is not None:
+                    scene_bytes = json.dumps(scene).encode("utf-8")
+                    try:
+                        urls["scene"] = _upload_to_supabase(f"runs/{run_id}/scene.json", scene_bytes, "application/json")
+                    except Exception as e:
+                        _log_error(f"Upload error for scene: {e}")
 
             _log_job_to_supabase(run_id, prompt, mode, output_type, generated_code, "completed")
             return {
@@ -1257,6 +1402,10 @@ def execute_generated_cad(code: str, output_type: str):
                 if path.stat().st_size > 50 * 1024 * 1024:
                     raise ValueError(f"{fmt} artifact exceeds size limit")
                 artifacts[fmt] = path.read_bytes()
+            if output_type == "2d_vector":
+                scene = build_drawing_scene(shape, units="mm")
+                if scene is not None:
+                    artifacts["scene"] = json.dumps(scene).encode("utf-8")
             return {"success": True, "artifacts": artifacts}
         except Exception as exc:
             return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
@@ -1342,11 +1491,11 @@ def execute_and_publish(payload: dict):
     if not executed.get("success"):
         return executed
     run_id = str(__import__("uuid").uuid4())
-    content_types = {"stl": "model/stl", "step": "application/octet-stream", "glb": "model/gltf-binary"}
-    urls = {
-        fmt: _upload_to_supabase(f"runs/{run_id}/model.{fmt}", artifact, content_types[fmt])
-        for fmt, artifact in executed["artifacts"].items()
-    }
+    content_types = {"stl": "model/stl", "step": "application/octet-stream", "glb": "model/gltf-binary", "scene": "application/json"}
+    urls = {}
+    for fmt, artifact in executed["artifacts"].items():
+        ext = "scene.json" if fmt == "scene" else f"model.{fmt}"
+        urls[fmt] = _upload_to_supabase(f"runs/{run_id}/{ext}", artifact, content_types.get(fmt, "application/octet-stream"))
     return {"success": True, "urls": urls}
 
 

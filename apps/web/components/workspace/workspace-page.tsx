@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 
 import { Topbar } from "@/components/chrome/topbar";
+import { DraftingViewport2D } from "@/components/workspace/drafting-viewport-2d";
 import {
   answerClarification, createGuestSession, createProject, deleteAttachment,
   getGeneration, getProject, startGeneration, uploadAttachment,
@@ -48,6 +49,7 @@ export function WorkspacePage() {
   const [viewerTone, setViewerTone] = useState<(typeof viewerToneOptions)[number]["id"]>("studio");
   const [autoRotate, setAutoRotate] = useState(true);
   const [viewerResetToken, setViewerResetToken] = useState(0);
+  const [scenePayload, setScenePayload] = useState<Record<string, unknown> | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   async function refresh(id: string) {
@@ -187,8 +189,29 @@ export function WorkspacePage() {
   const status = activeRun?.status || "idle";
   const clarification = activeRun?.status === "awaiting_clarification";
   const currentProfile = profileOptions.find((option) => option.id === profile) || profileOptions[1];
+  const outputType = detail?.project?.output_type;
+  const is2D = outputType === "2d_vector";
   const viewportUrl = selectedVersion?.artifacts.glb || null;
-  const previewUnavailable = Boolean(selectedVersion && !viewportUrl);
+  const sceneArtifactUrl = is2D ? selectedVersion?.artifacts.scene || null : null;
+  const previewUnavailable = Boolean(selectedVersion && !is2D && !viewportUrl);
+
+  useEffect(() => {
+    setScenePayload(null);
+    if (!sceneArtifactUrl) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch(sceneArtifactUrl, { cache: "no-store" });
+        if (!response.ok) return;
+        const data = (await response.json()) as Record<string, unknown>;
+        if (!cancelled) setScenePayload(data);
+      } catch {
+        if (!cancelled) setScenePayload(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [sceneArtifactUrl]);
+
   const specDimensions = Object.entries(selectedVersion?.spec?.dimensions || {}).filter(([, value]) => Number.isFinite(value));
   const artifactEntries = Object.entries(selectedVersion?.artifacts || {});
   const familyHint = selectedVersion?.spec?.family_hint || {};
@@ -304,24 +327,34 @@ export function WorkspacePage() {
             </div>
             <div className="viewer-shell">
               <div className="viewer-grid" />
-              <CADViewport url={viewportUrl} autoRotate={autoRotate} tone={viewerTone} resetToken={viewerResetToken} />
+              {is2D ? (
+                <DraftingViewport2D scene={scenePayload} />
+              ) : (
+                <CADViewport url={viewportUrl} autoRotate={autoRotate} tone={viewerTone} resetToken={viewerResetToken} />
+              )}
               <div className="viewer-toolbar">
-                <button type="button" className="viewer-tool" onClick={() => setAutoRotate((value) => !value)}>{autoRotate ? "Stop spin" : "Auto spin"}</button>
-                <button type="button" className="viewer-tool" onClick={() => setViewerResetToken((value) => value + 1)} disabled={!viewportUrl}>Refit</button>
-                {viewerToneOptions.map((option) => (
-                  <button
-                    key={option.id}
-                    type="button"
-                    className={option.id === viewerTone ? "viewer-tool viewer-tool--selected" : "viewer-tool"}
-                    onClick={() => setViewerTone(option.id)}
-                  >
-                    {option.label}
-                  </button>
-                ))}
+                {is2D ? (
+                  <button type="button" className="viewer-tool" onClick={() => setViewerResetToken((value) => value + 1)} disabled={!scenePayload}>Refit</button>
+                ) : (
+                  <>
+                    <button type="button" className="viewer-tool" onClick={() => setAutoRotate((value) => !value)}>{autoRotate ? "Stop spin" : "Auto spin"}</button>
+                    <button type="button" className="viewer-tool" onClick={() => setViewerResetToken((value) => value + 1)} disabled={!viewportUrl}>Refit</button>
+                    {viewerToneOptions.map((option) => (
+                      <button
+                        key={option.id}
+                        type="button"
+                        className={option.id === viewerTone ? "viewer-tool viewer-tool--selected" : "viewer-tool"}
+                        onClick={() => setViewerTone(option.id)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </>
+                )}
               </div>
               <div className="viewer-overlay"><span>{selectedVersion ? selectedVersion.id.slice(0, 12) : "No version"}</span><span>{status}</span></div>
             </div>
-            {previewUnavailable && <div className="workspace-note">Preview GLB is unavailable for this version. Use the export buttons below for STL or STEP.</div>}
+            {previewUnavailable && <div className="workspace-note">{is2D ? "Drawing scene is unavailable for this version." : "Preview GLB is unavailable for this version. Use the export buttons below for STL or STEP."}</div>}
             <div className="viewer-metadata">
               <div className="viewer-metadata__block">
                 <p className="section-tag">Spec memory</p>
