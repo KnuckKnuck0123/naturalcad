@@ -160,9 +160,10 @@ def test_svg_and_dxf_preserve_patterned_hatch_hole_and_bylayer_style(tmp_path: P
 
     svg = render_svg(scene)
     assert 'data-pattern="ANSI31"' in svg
+    assert 'data-display-mode="monochrome"' in svg
     assert 'data-preview-simplified="true"' not in svg
     assert 'stroke-opacity="0.600"' in svg
-    assert 'stroke="#00ffff"' in svg
+    assert 'stroke="#ffffff"' in svg
     assert 'stroke-dasharray="9 6"' in svg
 
     output = tmp_path / "patterned_hatch.dxf"
@@ -356,7 +357,7 @@ def test_uriu_dxf_flattens_layer_paths_and_preserves_metadata(tmp_path: Path) ->
     assert not document.audit().has_errors
 
 
-def test_display_and_plot_svg_use_layer_colors_and_plot_flag() -> None:
+def test_monochrome_working_color_and_plot_svg_modes() -> None:
     scene = scene_from_payload(
         {
             "standard_profile": NOAH_URIU_2D_PROFILE,
@@ -366,10 +367,15 @@ def test_display_and_plot_svg_use_layer_colors_and_plot_flag() -> None:
             ],
         }
     )
-    display = render_svg(scene)
+    monochrome = render_svg(scene)
+    working_color = render_svg(scene, monochrome=False)
     plot = render_svg(scene, plot_mode=True)
-    assert 'data-entity-id="blue_cut"' in display and 'stroke="#0000ff"' in display
-    assert 'data-entity-id="helper"' in display
+    assert 'data-display-mode="monochrome"' in monochrome
+    assert 'data-entity-id="blue_cut"' in monochrome and 'stroke="#ffffff"' in monochrome
+    assert 'fill="url(#naturalcad-dot-grid)"' in monochrome
+    assert 'data-display-mode="working-color"' in working_color
+    assert 'data-entity-id="blue_cut"' in working_color and 'stroke="#0000ff"' in working_color
+    assert 'data-entity-id="helper"' in working_color
     assert 'data-entity-id="blue_cut"' in plot and 'stroke="#000000"' in plot
     assert 'data-entity-id="helper"' not in plot
 

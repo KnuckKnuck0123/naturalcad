@@ -29,6 +29,7 @@ Runtime note:
 Space envs to set:
 - `OPENROUTER_API_KEY` as a secret when live model calls should be enabled
 - `NATURALCAD_2D_MODEL` as an optional public env override for the 2D drafting model
+- `NATURALCAD_2D_MAX_PASSES=2` for a cost-bounded repair pass on shallow creative concepts
 - `OPENROUTER_TITLE=NaturalCAD 2D`
 
 ## Data to capture

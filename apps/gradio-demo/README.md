@@ -19,7 +19,7 @@ Short UI note:
 - Gradio for the HF-facing UI
 - versioned, UI-free DrawingScene contract in `app/drawing_core.py`
 - `ezdxf` for DXF authoring/export
-- direct OpenRouter model calls for the first real drafting pass
+- direct OpenRouter model calls with one selective depth-repair pass for shallow complex concepts
 - QCAD as the target validation environment for output quality
 
 ## Current MVP behavior
@@ -34,7 +34,8 @@ Short UI note:
   - dimensions
   - text
   - leader note
-- applies the `NOAH_URIU_2D_V1` layer hierarchy with colored CAD working layers and black plot styles
+- applies the `NOAH_URIU_2D_V1` layer hierarchy while presenting disciplined white-on-black CAD linework by default
+- preserves working colors and black plot styles in the portable scene and DXF metadata
 - renders exact deterministic `ezdxf` hatch patterns in the SVG preview, including nested holes
 - reports a depth check when a creative concept is too sparse for the requested intent
 - writes DXF, SVG, and DrawingScene JSON into `artifacts/runs/`
@@ -62,6 +63,7 @@ See `docs/drawing-scene-v1.md`.
 - `OPENROUTER_MODEL` - fallback model id if `NATURALCAD_2D_MODEL` is unset
 - `OPENROUTER_REFERER` - optional OpenRouter header
 - `OPENROUTER_TITLE` - optional OpenRouter header/title
+- `NATURALCAD_2D_MAX_PASSES` - `1` or `2`; defaults to `2`, but the second pass runs only when an initial creative concept fails the depth gate
 
 This branch is intentionally narrower than the main NaturalCAD 3D product lane.
 

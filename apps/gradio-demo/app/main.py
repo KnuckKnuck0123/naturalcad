@@ -55,6 +55,10 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_REFERER = os.getenv("OPENROUTER_REFERER", "").strip()
 OPENROUTER_TITLE = os.getenv("OPENROUTER_TITLE", "NaturalCAD 2D").strip()
 OPENROUTER_TIMEOUT = float(os.getenv("NATURALCAD_2D_TIMEOUT", "120"))
+try:
+    MAX_GENERATION_PASSES = max(1, min(2, int(os.getenv("NATURALCAD_2D_MAX_PASSES", "2"))))
+except ValueError:
+    MAX_GENERATION_PASSES = 2
 MAX_PROMPT_CHARS = 2_000
 MAX_REFERENCE_CHARS = 2_000
 MAX_REFINEMENT_CHARS = 1_000
@@ -193,6 +197,21 @@ def _strip_markdown_fences(text: str) -> str:
     return text.strip()
 
 
+def _post_openrouter(payload: dict[str, Any]) -> dict[str, Any]:
+    with httpx.Client(timeout=OPENROUTER_TIMEOUT) as client:
+        response = client.post(OPENROUTER_API_URL, headers=_openrouter_headers(), json=payload)
+    response.raise_for_status()
+    return response.json()
+
+
+def _merge_usage(total: dict[str, int], usage: Any) -> None:
+    if not isinstance(usage, dict):
+        return
+    for key, value in usage.items():
+        if isinstance(value, int) and not isinstance(value, bool):
+            total[key] = total.get(key, 0) + value
+
+
 def request_model_scene(
     prompt: str,
     reference_notes: str,
@@ -218,37 +237,92 @@ def request_model_scene(
             "Previous validated scene:",
             json.dumps(prior_scene, separators=(",", ":")),
         ])
-    user_text = "\n".join(user_lines)
-    content: Any = [{"type": "text", "text": user_text}]
-    if image_path:
-        content.append({"type": "image_url", "image_url": {"url": _data_url_for_image(image_path)}})
-
-    payload = {
-        "model": OPENROUTER_MODEL,
-        "messages": [
-            {"role": "system", "content": MODEL_SYSTEM_PROMPT},
-            {"role": "user", "content": content if image_path else user_text},
-        ],
-        "temperature": profile["temperature"],
-        "max_tokens": profile["max_tokens"],
-    }
     started = time.monotonic()
+    usage_total: dict[str, int] = {}
+    pass_summaries: list[dict[str, Any]] = []
+    scene: DrawingScene | None = None
+    deepen_error: str | None = None
+    max_passes = (
+        MAX_GENERATION_PASSES
+        if profile["mode"] == "CREATIVE_CONCEPT" and prior_scene is None
+        else 1
+    )
     try:
-        with httpx.Client(timeout=OPENROUTER_TIMEOUT) as client:
-            response = client.post(OPENROUTER_API_URL, headers=_openrouter_headers(), json=payload)
-        response.raise_for_status()
-        data = response.json()
-        raw_content = (data.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
-        if not raw_content:
-            raise ValueError("Model returned empty content")
-        scene = scene_from_payload(json.loads(_strip_markdown_fences(raw_content)), requested_units=units)
+        for pass_index in range(max_passes):
+            if pass_index == 0:
+                user_text = "\n".join(user_lines)
+                content: Any = [{"type": "text", "text": user_text}]
+                if image_path:
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": _data_url_for_image(image_path)},
+                    })
+                user_content: Any = content if image_path else user_text
+            else:
+                assert scene is not None
+                quality = scene_quality_report(scene, intent_mode=profile["mode"])
+                user_content = "\n".join([
+                    "DEEPEN THE PREVIOUS VALIDATED DRAWING SCENE.",
+                    "The first pass is valid but visually and geometrically too shallow.",
+                    "Quality issues: " + "; ".join(quality["issues"]),
+                    "Return the complete updated scene, not a patch or explanation.",
+                    "Preserve every useful existing entity and stable id. Add secondary edges, joints, tread lines, occlusion breaks, supports, and intentional hatch/shadow regions until every stated depth target passes.",
+                    "Do not replace the subject, simplify the composition, add unrelated template geometry, or add dimensions unless requested.",
+                    "Previous validated scene:",
+                    json.dumps(scene_to_dict(scene), separators=(",", ":")),
+                ])
+
+            payload = {
+                "model": OPENROUTER_MODEL,
+                "messages": [
+                    {"role": "system", "content": MODEL_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+                "temperature": profile["temperature"],
+                "max_tokens": profile["max_tokens"],
+            }
+            pass_started = time.monotonic()
+            try:
+                data = _post_openrouter(payload)
+                raw_content = (
+                    data.get("choices", [{}])[0].get("message", {}).get("content") or ""
+                ).strip()
+                if not raw_content:
+                    raise ValueError("Model returned empty content")
+                candidate = scene_from_payload(
+                    json.loads(_strip_markdown_fences(raw_content)), requested_units=units,
+                )
+            except Exception as exc:
+                if scene is None:
+                    raise
+                deepen_error = str(exc)
+                break
+
+            scene = candidate
+            _merge_usage(usage_total, data.get("usage", {}))
+            quality = scene_quality_report(scene, intent_mode=profile["mode"])
+            pass_summaries.append({
+                "pass": pass_index + 1,
+                "latency_ms": int((time.monotonic() - pass_started) * 1000),
+                "quality_status": quality["status"],
+                "quality_issues": quality["issues"],
+                "entity_counts": _entity_counts(scene),
+            })
+            if quality["status"] == "pass":
+                break
+
+        if scene is None:
+            raise ValueError("Model did not produce a valid drawing scene")
         return scene, {
             "source": "model",
             "model": OPENROUTER_MODEL,
             "intent_mode": profile["mode"],
             "max_tokens": profile["max_tokens"],
             "latency_ms": int((time.monotonic() - started) * 1000),
-            "usage": data.get("usage", {}),
+            "passes": len(pass_summaries),
+            "pass_summaries": pass_summaries,
+            "usage": usage_total,
+            "deepen_error": deepen_error,
         }
     except Exception as exc:
         return None, {
@@ -321,6 +395,9 @@ def _finish_run(
         "intent_mode": model_meta.get("intent_mode"),
         "model_max_tokens": model_meta.get("max_tokens"),
         "model_latency_ms": model_meta.get("latency_ms"),
+        "model_passes": model_meta.get("passes", 1),
+        "model_pass_summaries": model_meta.get("pass_summaries", []),
+        "deepen_error": model_meta.get("deepen_error"),
         "total_runtime_ms": int((time.monotonic() - started) * 1000),
         "usage": model_meta.get("usage", {}),
         "fallback_reason": model_meta.get("reason"),
@@ -345,6 +422,10 @@ def _finish_run(
         status_lines.append(f"Model: `{summary['model']}`")
     if summary.get("fallback_reason"):
         status_lines.append(f"Reason: `{summary['fallback_reason']}`")
+    if summary.get("model_passes", 1) > 1:
+        status_lines.append(f"Depth repair: `{summary['model_passes']}` model passes")
+    if summary.get("deepen_error"):
+        status_lines.append(f"Depth repair stopped safely: `{summary['deepen_error']}`")
     if quality["status"] != "pass":
         status_lines.append("Depth check: " + "; ".join(quality["issues"]))
     return (

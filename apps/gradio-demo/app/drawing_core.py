@@ -816,17 +816,31 @@ def _rgb_svg_color(rgb: tuple[int, int, int]) -> str:
     return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
 
 
-def _svg_layer_color(scene: DrawingScene, layer_name: str, *, plot_mode: bool = False) -> str:
+def _svg_layer_color(
+    scene: DrawingScene,
+    layer_name: str,
+    *,
+    plot_mode: bool = False,
+    monochrome: bool = False,
+) -> str:
     layer = _svg_layer_style(scene, layer_name)
+    if monochrome and not plot_mode:
+        return "#ffffff"
     rgb = layer.plot_color if plot_mode else layer.display_color
     return _rgb_svg_color(rgb) if rgb is not None else _aci_svg_color(layer.color)
 
 
 def _svg_layer_stroke(
-    scene: DrawingScene, layer_name: str, *, plot_mode: bool = False,
+    scene: DrawingScene,
+    layer_name: str,
+    *,
+    plot_mode: bool = False,
+    monochrome: bool = False,
 ) -> tuple[str, float, str]:
     layer = _svg_layer_style(scene, layer_name)
-    color = _svg_layer_color(scene, layer_name, plot_mode=plot_mode)
+    color = _svg_layer_color(
+        scene, layer_name, plot_mode=plot_mode, monochrome=monochrome,
+    )
     lineweight_mm = layer.lineweight_mm if layer.lineweight_mm is not None else layer.lineweight / 100
     width = max(0.6, min(8.0, lineweight_mm * 8.0))
     dash_by_linetype = {
@@ -908,7 +922,12 @@ def _preview_hatch_segments(
     ], simplified
 
 
-def render_svg(scene: DrawingScene, *, plot_mode: bool = False) -> str:
+def render_svg(
+    scene: DrawingScene,
+    *,
+    plot_mode: bool = False,
+    monochrome: bool = True,
+) -> str:
     size, padding = 860, 56
     bounds = scene_bounds(scene)
     map_point = lambda point: _svg_point(point, bounds, size, padding)
@@ -932,20 +951,30 @@ def render_svg(scene: DrawingScene, *, plot_mode: bool = False) -> str:
         preview_simplified = preview_simplified or simplified
 
     simplified_attr = ' data-preview-simplified="true"' if preview_simplified else ""
-    background = "#ffffff" if plot_mode else "#0e1116"
-    field = "#ffffff" if plot_mode else "#141922"
-    border = "#cbd5e1" if plot_mode else "#2b3342"
+    background = "#ffffff" if plot_mode else "#000000"
+    field = "#ffffff" if plot_mode else "#000000"
+    border = "#cbd5e1" if plot_mode else "#333333"
+    display_mode = "plot" if plot_mode else ("monochrome" if monochrome else "working-color")
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" width="100%" role="img" '
-        f'aria-label="{html.escape(scene.title)}" data-standard-profile="{html.escape(scene.standard_profile)}"{simplified_attr}>',
+        f'aria-label="{html.escape(scene.title)}" data-standard-profile="{html.escape(scene.standard_profile)}" '
+        f'data-display-mode="{display_mode}"{simplified_attr}>',
         f'<rect width="100%" height="100%" fill="{background}"/>',
-        f'<rect x="18" y="18" width="824" height="824" rx="18" fill="{field}" stroke="{border}" stroke-width="2"/>',
+        f'<rect x="14" y="14" width="832" height="832" rx="4" fill="{field}" stroke="{border}" stroke-width="1"/>',
     ]
+    if not plot_mode:
+        parts.extend([
+            '<defs><pattern id="naturalcad-dot-grid" width="18" height="18" patternUnits="userSpaceOnUse">'
+            '<circle cx="1" cy="1" r="0.55" fill="#141414"/></pattern></defs>',
+            '<rect x="15" y="15" width="830" height="830" fill="url(#naturalcad-dot-grid)"/>',
+        ])
     for hatch in scene.hatches:
         layer = _svg_layer_style(scene, hatch.layer)
         if plot_mode and not layer.plot:
             continue
-        color = _svg_layer_color(scene, hatch.layer, plot_mode=plot_mode)
+        color = _svg_layer_color(
+            scene, hatch.layer, plot_mode=plot_mode, monochrome=monochrome,
+        )
         common = (
             f'data-entity-id="{html.escape(hatch.id)}" data-layer="{html.escape(hatch.layer)}" '
             f'data-role="{html.escape(layer.semantic_role)}" data-pattern="{html.escape(hatch.pattern)}"'
@@ -970,7 +999,9 @@ def render_svg(scene: DrawingScene, *, plot_mode: bool = False) -> str:
             continue
         mapped = list(map(map_point, polyline.points))
         path = " ".join(f"{x:.2f},{y:.2f}" for x, y in mapped)
-        color, stroke_width, dash_pattern = _svg_layer_stroke(scene, polyline.layer, plot_mode=plot_mode)
+        color, stroke_width, dash_pattern = _svg_layer_stroke(
+            scene, polyline.layer, plot_mode=plot_mode, monochrome=monochrome,
+        )
         dash = f' stroke-dasharray="{dash_pattern}"' if dash_pattern else ""
         close = " Z" if polyline.closed else ""
         parts.append(f'<path data-entity-id="{html.escape(polyline.id)}" data-layer="{html.escape(polyline.layer)}" data-role="{html.escape(layer.semantic_role)}" d="M {path}{close}" fill="none" stroke="{color}" stroke-width="{stroke_width:.2f}"{dash}/>')
@@ -979,7 +1010,9 @@ def render_svg(scene: DrawingScene, *, plot_mode: bool = False) -> str:
         if plot_mode and not layer.plot:
             continue
         cx, cy = map_point(circle.center)
-        color, stroke_width, dash_pattern = _svg_layer_stroke(scene, circle.layer, plot_mode=plot_mode)
+        color, stroke_width, dash_pattern = _svg_layer_stroke(
+            scene, circle.layer, plot_mode=plot_mode, monochrome=monochrome,
+        )
         dash = f' stroke-dasharray="{dash_pattern}"' if dash_pattern else ""
         parts.append(f'<circle data-entity-id="{html.escape(circle.id)}" data-layer="{html.escape(circle.layer)}" data-role="{html.escape(layer.semantic_role)}" cx="{cx:.2f}" cy="{cy:.2f}" r="{circle.radius * scale:.2f}" fill="none" stroke="{color}" stroke-width="{stroke_width:.2f}"{dash}/>')
     for arc in scene.arcs:
@@ -998,7 +1031,9 @@ def render_svg(scene: DrawingScene, *, plot_mode: bool = False) -> str:
         ex, ey = map_point(end)
         delta = (arc.end_angle - arc.start_angle) % 360
         large = 1 if delta > 180 else 0
-        color, stroke_width, dash_pattern = _svg_layer_stroke(scene, arc.layer, plot_mode=plot_mode)
+        color, stroke_width, dash_pattern = _svg_layer_stroke(
+            scene, arc.layer, plot_mode=plot_mode, monochrome=monochrome,
+        )
         dash = f' stroke-dasharray="{dash_pattern}"' if dash_pattern else ""
         parts.append(f'<path data-entity-id="{html.escape(arc.id)}" data-layer="{html.escape(arc.layer)}" data-role="{html.escape(layer.semantic_role)}" d="M {sx:.2f},{sy:.2f} A {arc.radius * scale:.2f},{arc.radius * scale:.2f} 0 {large} 0 {ex:.2f},{ey:.2f}" fill="none" stroke="{color}" stroke-width="{stroke_width:.2f}"{dash}/>')
     for slot in scene.slots:
@@ -1008,7 +1043,9 @@ def render_svg(scene: DrawingScene, *, plot_mode: bool = False) -> str:
         top_left, top_right, bottom_right, bottom_left, _, _ = _slot_points(slot)
         tl, tr, br, bl = map(map_point, (top_left, top_right, bottom_right, bottom_left))
         radius = slot.width / 2 * scale
-        color, stroke_width, dash_pattern = _svg_layer_stroke(scene, slot.layer, plot_mode=plot_mode)
+        color, stroke_width, dash_pattern = _svg_layer_stroke(
+            scene, slot.layer, plot_mode=plot_mode, monochrome=monochrome,
+        )
         dash = f' stroke-dasharray="{dash_pattern}"' if dash_pattern else ""
         parts.append(
             f'<path data-entity-id="{html.escape(slot.id)}" data-layer="{html.escape(slot.layer)}" data-role="{html.escape(layer.semantic_role)}" d="M {tl[0]:.2f},{tl[1]:.2f} L {tr[0]:.2f},{tr[1]:.2f} '
@@ -1025,7 +1062,9 @@ def render_svg(scene: DrawingScene, *, plot_mode: bool = False) -> str:
             p1, p2 = (p1[0] + offset, p1[1]), (p2[0] + offset, p2[1])
         else:
             p1, p2 = (p1[0], p1[1] + offset), (p2[0], p2[1] + offset)
-        color, stroke_width, dash_pattern = _svg_layer_stroke(scene, dimension.layer, plot_mode=plot_mode)
+        color, stroke_width, dash_pattern = _svg_layer_stroke(
+            scene, dimension.layer, plot_mode=plot_mode, monochrome=monochrome,
+        )
         dash = f' stroke-dasharray="{dash_pattern}"' if dash_pattern else ""
         parts.append(f'<line data-entity-id="{html.escape(dimension.id)}" data-layer="{html.escape(dimension.layer)}" data-role="{html.escape(layer.semantic_role)}" x1="{p1[0]:.2f}" y1="{p1[1]:.2f}" x2="{p2[0]:.2f}" y2="{p2[1]:.2f}" stroke="{color}" stroke-width="{stroke_width:.2f}"{dash}/>')
         parts.append(f'<text x="{(p1[0] + p2[0]) / 2:.2f}" y="{(p1[1] + p2[1]) / 2 - 6:.2f}" font-size="16" fill="{color}" text-anchor="middle">{html.escape(dimension.text or "")}</text>')
@@ -1035,7 +1074,9 @@ def render_svg(scene: DrawingScene, *, plot_mode: bool = False) -> str:
             continue
         mapped = list(map(map_point, leader.points))
         points = " ".join(f"{x:.2f},{y:.2f}" for x, y in mapped)
-        color, stroke_width, dash_pattern = _svg_layer_stroke(scene, leader.layer, plot_mode=plot_mode)
+        color, stroke_width, dash_pattern = _svg_layer_stroke(
+            scene, leader.layer, plot_mode=plot_mode, monochrome=monochrome,
+        )
         dash = f' stroke-dasharray="{dash_pattern}"' if dash_pattern else ""
         parts.append(f'<polyline data-entity-id="{html.escape(leader.id)}" data-layer="{html.escape(leader.layer)}" data-role="{html.escape(layer.semantic_role)}" points="{points}" fill="none" stroke="{color}" stroke-width="{stroke_width:.2f}"{dash}/>')
         x, y = mapped[-1]
@@ -1045,9 +1086,25 @@ def render_svg(scene: DrawingScene, *, plot_mode: bool = False) -> str:
         if plot_mode and not layer.plot:
             continue
         x, y = map_point(text_entity.insert)
-        color = _svg_layer_color(scene, text_entity.layer, plot_mode=plot_mode)
+        color = _svg_layer_color(
+            scene, text_entity.layer, plot_mode=plot_mode, monochrome=monochrome,
+        )
         font_size = max(10.0, min(36.0, text_entity.height * scale))
         parts.append(f'<text data-entity-id="{html.escape(text_entity.id)}" data-layer="{html.escape(text_entity.layer)}" data-role="{html.escape(layer.semantic_role)}" x="{x:.2f}" y="{y:.2f}" font-size="{font_size:.2f}" fill="{color}">{html.escape(text_entity.text)}</text>')
+    if not plot_mode:
+        parts.extend([
+            '<g stroke="#ffffff" stroke-width="1.4" fill="#ffffff" opacity="0.9" '
+            'font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">'
+            '<line x1="38" y1="806" x2="60" y2="806"/><path d="M 60 806 L 55 803 L 55 809 Z" stroke="none"/>'
+            '<line x1="38" y1="806" x2="38" y2="784"/><path d="M 38 784 L 35 789 L 41 789 Z" stroke="none"/>'
+            '<circle cx="38" cy="806" r="1.5" fill="none"/><text x="65" y="810" stroke="none">X</text>'
+            '<text x="34" y="778" stroke="none">Y</text></g>',
+            '<g stroke="#475569" stroke-width="1" fill="none">'
+            '<path d="M 14 34 L 14 14 L 34 14 M 826 14 L 846 14 L 846 34 '
+            'M 14 826 L 14 846 L 34 846 M 826 846 L 846 846 L 846 826"/></g>',
+            f'<text x="824" y="824" fill="#475569" text-anchor="end" font-size="11" '
+            f'font-family="ui-monospace, SFMono-Regular, Menlo, monospace">{html.escape(scene.title)}</text>',
+        ])
     parts.append("</svg>")
     return "".join(parts)
 

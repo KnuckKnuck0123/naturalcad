@@ -22,6 +22,7 @@
 - Host: https://noahtheboa-naturalcad-2d.hf.space
 - Required Space secret: `OPENROUTER_API_KEY`
 - Space variable: `NATURALCAD_2D_MODEL=anthropic/claude-opus-4.8`
+- Optional Space variable: `NATURALCAD_2D_MAX_PASSES=2` enables one depth-repair pass only when a creative scene fails validation
 
 ## Verified locally
 - live text generation through `openai/gpt-4.1-mini`
