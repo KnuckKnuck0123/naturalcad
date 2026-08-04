@@ -687,22 +687,97 @@ def build_drawing_scene(shape, units="mm"):
     if not entities:
         return None
 
+    # --- Auto-decorate: hatches, dimensions, centerlines -------------------
+    hatches = []
+    for poly in polylines:
+        if not poly["closed"] or len(poly["points"]) < 3:
+            continue
+        hatches.append({
+            "id": f"hatch_{len(hatches)+1:03d}",
+            "boundary": poly["points"],
+            "layer": "HATCH",
+            "pattern": "SOLID",
+        })
+
+    # Bounding box → overall width + height dimensions
+    all_pts = [pt for poly in polylines for pt in poly["points"]]
+    for c in circles:
+        all_pts.append(c["center"])
+    if not all_pts:
+        return None
+    xs = [p[0] for p in all_pts]
+    ys = [p[1] for p in all_pts]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    width = max_x - min_x
+    height = max_y - min_y
+
+    dimensions = []
+    if width > 0:
+        dimensions.append({
+            "id": "dim_width",
+            "start": [min_x, min_y],
+            "end": [max_x, min_y],
+            "offset": max(10, height * 0.25),
+            "layer": "DIMENSIONS",
+            "angle": 0.0,
+            "text": f"{_format_dim(width)} {units}",
+        })
+    if height > 0:
+        dimensions.append({
+            "id": "dim_height",
+            "start": [max_x, min_y],
+            "end": [max_x, max_y],
+            "offset": max(10, width * 0.25),
+            "layer": "DIMENSIONS",
+            "angle": 90.0,
+            "text": f"{_format_dim(height)} {units}",
+        })
+
+    # Symmetry centerlines: if the profile is within tolerance symmetric about
+    # the X=0 or Y=0 axis, emit a centerline through the middle.
+    centerlines = []
+    cx = (min_x + max_x) / 2
+    cy = (min_y + max_y) / 2
+    sym_tol = max(width, height) * 0.02
+    if abs(cx) < sym_tol and width > 0:
+        centerlines.append({
+            "id": "cl_vertical",
+            "points": [[0, min_y - 10], [0, max_y + 10]],
+            "layer": "CENTER",
+            "closed": False,
+        })
+    if abs(cy) < sym_tol and height > 0:
+        centerlines.append({
+            "id": "cl_horizontal",
+            "points": [[min_x - 10, 0], [max_x + 10, 0]],
+            "layer": "CENTER",
+            "closed": False,
+        })
+
     return {
         "title": "Generated 2D profile",
         "units": units,
         "schema_version": "1.0",
         "coordinate_system": "XY_RIGHT_HANDED",
         "layers": _SCENE_LAYERS,
-        "polylines": polylines,
+        "polylines": polylines + centerlines,
         "circles": circles,
         "arcs": arcs,
         "slots": [],
-        "hatches": [],
+        "hatches": hatches,
         "texts": [],
-        "dimensions": [],
+        "dimensions": dimensions,
         "leaders": [],
         "reference_note": "",
     }
+
+
+def _format_dim(value):
+    """Format a dimension value like Python's f-string for compact output."""
+    if abs(value - round(value)) < 1e-4:
+        return str(int(round(value)))
+    return f"{value:.1f}"
 
 
 @app.function(
