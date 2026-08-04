@@ -12,6 +12,7 @@ const SCENES = [
 
 export function DevDraftingPreview() {
   const [active, setActive] = useState<(typeof SCENES)[number]["id"]>("plate");
+  const [resetToken, setResetToken] = useState(0);
   const current = SCENES.find((option) => option.id === active) ?? SCENES[0];
 
   return (
@@ -19,8 +20,8 @@ export function DevDraftingPreview() {
       <div className="legal-content">
         <h1>Drafting Viewport 2D — dev preview</h1>
         <p className="legal-date">
-          Fixture-backed preview of <code>DraftingViewport2D</code>. Not wired to live
-          generation. Dev-only — 404s in production.
+          Fixture-backed preview of <code>DraftingViewport2D</code>. Scroll to zoom, drag to pan.
+          Not wired to live generation. Dev-only — 404s in production.
         </p>
 
         <div style={{ display: "flex", gap: "0.5rem", margin: "1rem 0" }}>
@@ -34,10 +35,11 @@ export function DevDraftingPreview() {
               {option.label}
             </button>
           ))}
+          <button type="button" className="viewer-tool" onClick={() => setResetToken((v) => v + 1)}>Refit</button>
         </div>
 
         <div className="viewer-shell" style={{ height: 540 }}>
-          <DraftingViewport2D scene={current.payload} />
+          <DraftingViewport2D scene={current.payload} resetToken={resetToken} />
         </div>
       </div>
     </main>

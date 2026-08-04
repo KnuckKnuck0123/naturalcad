@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
-import type { CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
 
 import { parseDrawingScene } from "@/lib/drawing-scene";
 import type { DrawingScene } from "@/lib/drawing-scene";
@@ -10,6 +10,8 @@ import { arcPath, fitViewport, num, sceneBounds, slotPath } from "@/lib/drawing-
 
 const VIEW_SIZE = 860;
 const PADDING = 56;
+const MIN_ZOOM = 0.2;
+const MAX_ZOOM = 20;
 
 /** Palette matching the Python preview renderer. */
 const LAYER_GEOMETRY = "#d5d9e3";
@@ -49,6 +51,8 @@ interface DraftingViewport2DProps {
   className?: string;
   style?: CSSProperties;
   "aria-label"?: string;
+  /** Bumping this token resets pan/zoom to fit (so the parent Refit button works). */
+  resetToken?: number;
 }
 
 export function DraftingViewport2D({
@@ -58,7 +62,48 @@ export function DraftingViewport2D({
   className,
   style,
   "aria-label": ariaLabel,
+  resetToken,
 }: DraftingViewport2DProps) {
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState<[number, number]>([0, 0]);
+  const dragRef = useRef<{ active: boolean; startX: number; startY: number; panX: number; panY: number } | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+
+  const parsed = useMemo(() => (scene == null ? null : parseDrawingScene(scene)), [scene]);
+
+  // Reset pan/zoom when resetToken bumps or the scene identity changes.
+  useEffect(() => {
+    setZoom(1);
+    setPan([0, 0]);
+  }, [resetToken, scene]);
+
+  const onWheel = useCallback((event: ReactWheelEvent<SVGSVGElement>) => {
+    // We use deltaMode-free pixel scaling; prevent the page from scrolling.
+    if (event.ctrlKey || event.metaKey || true) {
+      // Always swallow wheel so the page doesn't scroll under the viewport.
+    }
+    const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+    setZoom((prev) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, prev * factor)));
+  }, []);
+
+  const onPointerDown = useCallback((event: ReactPointerEvent<SVGSVGElement>) => {
+    (event.currentTarget as SVGSVGElement).setPointerCapture(event.pointerId);
+    dragRef.current = { active: true, startX: event.clientX, startY: event.clientY, panX: pan[0], panY: pan[1] };
+  }, [pan]);
+
+  const onPointerMove = useCallback((event: ReactPointerEvent<SVGSVGElement>) => {
+    const drag = dragRef.current;
+    if (!drag?.active) return;
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    setPan([drag.panX + dx, drag.panY + dy]);
+  }, []);
+
+  const onPointerUp = useCallback((event: ReactPointerEvent<SVGSVGElement>) => {
+    if (dragRef.current) dragRef.current.active = false;
+    try { (event.currentTarget as SVGSVGElement).releasePointerCapture(event.pointerId); } catch { /* ignore */ }
+  }, []);
+
   if (scene == null) {
     return (
       <div
@@ -82,14 +127,12 @@ export function DraftingViewport2D({
     );
   }
 
-  const parsed = useMemo(() => parseDrawingScene(scene), [scene]);
-
   const body = useMemo(() => {
-    if (!parsed.ok || !parsed.scene) return null;
+    if (!parsed?.ok || !parsed.scene) return null;
     return renderScene(parsed.scene);
   }, [parsed]);
 
-  if (!parsed.ok) {
+  if (parsed && !parsed.ok) {
     return (
       <div
         className={className}
@@ -112,27 +155,41 @@ export function DraftingViewport2D({
     );
   }
 
-  if (!body) return null;
+  if (!body || !parsed?.ok) return null;
 
   const title = parsed.scene.title;
+  const cx = VIEW_SIZE / 2;
+  const cy = VIEW_SIZE / 2;
+  // Zoom around the viewport center, then translate by the pan offset.
+  const transform = `translate(${num(pan[0])}, ${num(pan[1])}) translate(${cx}, ${cy}) scale(${zoom.toFixed(4)}) translate(${-cx}, ${-cy})`;
+  const cursor = dragRef.current?.active ? "grabbing" : "grab";
 
   return (
     <svg
+      ref={svgRef}
       className={className}
-      style={style}
+      style={{ ...style, cursor, touchAction: "none" }}
       width={width}
       height={height}
       viewBox={`0 0 ${VIEW_SIZE} ${VIEW_SIZE}`}
       role="img"
       aria-label={ariaLabel ?? title}
       preserveAspectRatio="xMidYMid meet"
+      onWheel={onWheel}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerLeave={onPointerUp}
     >
       <rect width="100%" height="100%" fill="#0e1116" />
       <rect
         x="20" y="20" width={VIEW_SIZE - 40} height={VIEW_SIZE - 40} rx="18"
         fill="#141922" stroke="#2b3342" strokeWidth="2"
       />
-      {body}
+      <g transform={transform}>{body}</g>
+      <text x={VIEW_SIZE - 24} y={VIEW_SIZE - 24} fontSize="13" fill="#475569" textAnchor="end" fontFamily="var(--font-mono)">
+        {(zoom * 100).toFixed(0)}%
+      </text>
     </svg>
   );
 }

@@ -328,7 +328,7 @@ export function WorkspacePage() {
             <div className="viewer-shell">
               <div className="viewer-grid" />
               {is2D ? (
-                <DraftingViewport2D scene={scenePayload} />
+                <DraftingViewport2D scene={scenePayload} resetToken={viewerResetToken} />
               ) : (
                 <CADViewport url={viewportUrl} autoRotate={autoRotate} tone={viewerTone} resetToken={viewerResetToken} />
               )}
