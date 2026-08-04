@@ -13,13 +13,13 @@ const PADDING = 56;
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 20;
 
-/** CAD drafting palette — bright white geometry on pure black, classic colored linetypes. */
+/** CAD drafting palette — pure white lines on black. */
 const LAYER_GEOMETRY = "#ffffff";
-const LAYER_CENTER = "#00e5ff";    // cyan centerlines (AutoCAD classic)
-const LAYER_HATCH = "#5b6b86";
-const LAYER_DIMENSIONS = "#ffb300"; // amber dimensions
-const LAYER_TEXT = "#e2e8f0";
-const LAYER_ANNOTATION = "#00e676"; // green annotations
+const LAYER_CENTER = "#ffffff";
+const LAYER_HATCH = "#ffffff";
+const LAYER_DIMENSIONS = "#ffffff";
+const LAYER_TEXT = "#ffffff";
+const LAYER_ANNOTATION = "#ffffff";
 
 const GRID_MINOR = "#11161f";
 const GRID_MAJOR = "#1e2738";
