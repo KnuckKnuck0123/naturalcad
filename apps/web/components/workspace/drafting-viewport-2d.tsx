@@ -21,8 +21,8 @@ const LAYER_DIMENSIONS = "#ffffff";
 const LAYER_TEXT = "#ffffff";
 const LAYER_ANNOTATION = "#ffffff";
 
-const GRID_MINOR = "#11161f";
-const GRID_MAJOR = "#1e2738";
+const GRID_MINOR = "#080808";
+const GRID_MAJOR = "#141414";
 
 function colorForLayer(layer: string): string {
   const key = layer.toUpperCase();
@@ -196,10 +196,10 @@ export function DraftingViewport2D({
       onPointerUp={onPointerUp}
       onPointerLeave={onPointerUp}
     >
-      <rect width="100%" height="100%" fill="#0a0d12" />
+      <rect width="100%" height="100%" fill="#000000" />
       <rect
         x="14" y="14" width={VIEW_SIZE - 28} height={VIEW_SIZE - 28} rx="4"
-        fill="#0d1118" stroke="#1e293b" strokeWidth="1"
+        fill="#000000" stroke="#333333" strokeWidth="1"
       />
       <g transform={transform}>
         {body}
