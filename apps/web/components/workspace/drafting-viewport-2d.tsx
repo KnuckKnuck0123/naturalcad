@@ -36,9 +36,21 @@ function colorForLayer(layer: string): string {
 
 function strokeDasharrayFor(layer: string): string | undefined {
   const upper = layer.toUpperCase();
-  if (upper.includes("CENTER")) return "12 8";
-  if (upper.includes("DASH") || upper.includes("HIDDEN")) return "8 6";
+  if (upper.includes("CENTER")) return "14 4 3 4";  // dash-dot pattern
+  if (upper.includes("DASH") || upper.includes("HIDDEN")) return "8 5";
+  if (upper.includes("PHANTOM")) return "12 4 3 4 3 4";
   return undefined;
+}
+
+/** Per-layer stroke weight — geometry reads heaviest, annotations lightest. */
+function strokeWidthFor(layer: string): number {
+  const upper = layer.toUpperCase();
+  if (upper.includes("CENTER")) return 1.0;
+  if (upper.includes("HATCH")) return 0.8;
+  if (upper.includes("DIMENSION")) return 1.2;
+  if (upper.includes("ANNOTATION") || upper.includes("LEADER")) return 1.2;
+  if (upper.includes("TEXT") || upper.includes("LABEL")) return 1.0;
+  return 2.2;  // GEOMETRY — heaviest, the silhouette reads first
 }
 
 interface DraftingViewport2DProps {
@@ -264,6 +276,7 @@ function renderScene(scene: DrawingScene) {
         {scene.polylines.map((polyline) => {
           const color = colorForLayer(polyline.layer);
           const dash = strokeDasharrayFor(polyline.layer);
+          const sw = strokeWidthFor(polyline.layer);
           const d = polyline.points
             .map((point) => project(point))
             .map(([x, y], index) => `${index === 0 ? "M" : "L"} ${num(x)},${num(y)}`)
@@ -275,9 +288,9 @@ function renderScene(scene: DrawingScene) {
               d={d}
               fill="none"
               stroke={color}
-              strokeWidth="1.8"
+              strokeWidth={sw}
               strokeLinejoin="round"
-              strokeLinecap="round"
+              strokeLinecap={dash ? "round" : "butt"}
               strokeDasharray={dash}
             />
           );
@@ -290,7 +303,8 @@ function renderScene(scene: DrawingScene) {
               key={circle.id}
               data-entity-id={circle.id}
               cx={num(cx)} cy={num(cy)} r={num(circle.radius * viewport.scale)}
-              fill="none" stroke={colorForLayer(circle.layer)} strokeWidth="1.8"
+              fill="none" stroke={colorForLayer(circle.layer)} strokeWidth={strokeWidthFor(circle.layer)}
+              strokeDasharray={strokeDasharrayFor(circle.layer)} strokeLinecap="round"
             />
           );
         })}
@@ -300,7 +314,8 @@ function renderScene(scene: DrawingScene) {
             key={arc.id}
             data-entity-id={arc.id}
             d={arcPath(arc.center, arc.radius, arc.startAngle, arc.endAngle, project)}
-            fill="none" stroke={colorForLayer(arc.layer)} strokeWidth="1.8"
+            fill="none" stroke={colorForLayer(arc.layer)} strokeWidth={strokeWidthFor(arc.layer)}
+            strokeDasharray={strokeDasharrayFor(arc.layer)} strokeLinecap="round"
           />
         ))}
 
@@ -309,7 +324,8 @@ function renderScene(scene: DrawingScene) {
             key={slot.id}
             data-entity-id={slot.id}
             d={slotPath(slot, viewport.scale, project)}
-            fill="none" stroke={colorForLayer(slot.layer)} strokeWidth="1.8"
+            fill="none" stroke={colorForLayer(slot.layer)} strokeWidth={strokeWidthFor(slot.layer)}
+            strokeDasharray={strokeDasharrayFor(slot.layer)} strokeLinecap="round"
           />
         ))}
 
