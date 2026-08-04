@@ -7,6 +7,7 @@
     "frontend:local": "./scripts/run-local-frontend.sh",
     "web:dev": "npm --workspace @naturalcad/web run dev",
     "web:build": "npm --workspace @naturalcad/web run build",
+    "web:test": "npm --workspace @naturalcad/web run test",
     "web:typecheck": "npm --workspace @naturalcad/web run typecheck",
     "beta:check": "./scripts/check-beta-readiness.sh",
     "beta:deploy-worker": "./scripts/deploy-modal-worker.sh",
