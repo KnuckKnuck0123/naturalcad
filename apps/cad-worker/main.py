@@ -627,32 +627,40 @@ def build_drawing_scene(shape, units="mm"):
     arcs = []
     for edge in shape.edges():
         try:
-            start_3d = edge.start
-            end_3d = edge.end
+            _sp_raw = edge.start_point
+            start_3d = _sp_raw() if callable(_sp_raw) else _sp_raw
+            _ep_raw = edge.end_point
+            end_3d = _ep_raw() if callable(_ep_raw) else _ep_raw
             if abs(start_3d.Z) > _Z_TOL or abs(end_3d.Z) > _Z_TOL:
                 continue
         except Exception:
             continue
         s = (start_3d.X, start_3d.Y)
         e = (end_3d.X, end_3d.Y)
-        gt = edge.geom_type()
-        if gt == "LINE":
+        gt = edge.geom_type
+        gt_name = getattr(gt, "name", None) or str(gt).rsplit(".", 1)[-1]
+        if gt_name == "LINE":
             lines.append((s, e))
-        elif gt == "CIRCLE":
+        elif gt_name == "CIRCLE":
             try:
-                c = edge.center
+                _c_raw = getattr(edge, "arc_center", None) or edge.center
+                c = _c_raw() if callable(_c_raw) else _c_raw
+                _r_raw = edge.radius
+                r = _r_raw() if callable(_r_raw) else _r_raw
                 circles.append({
                     "id": f"circle_{len(circles)+1:03d}",
                     "center": [c.X, c.Y],
-                    "radius": edge.radius,
+                    "radius": r,
                     "layer": "GEOMETRY",
                 })
             except Exception:
                 pass
-        elif gt == "ARC":
+        elif gt_name == "ARC":
             try:
-                c = edge.center
-                r = edge.radius
+                _c_raw = getattr(edge, "arc_center", None) or edge.center
+                c = _c_raw() if callable(_c_raw) else _c_raw
+                _r_raw = edge.radius
+                r = _r_raw() if callable(_r_raw) else _r_raw
                 start_angle = math.degrees(math.atan2(s[1] - c.Y, s[0] - c.X))
                 end_angle = math.degrees(math.atan2(e[1] - c.Y, e[0] - c.X))
                 arcs.append({
