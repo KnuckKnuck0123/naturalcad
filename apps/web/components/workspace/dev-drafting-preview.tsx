@@ -4,10 +4,12 @@ import { useState } from "react";
 
 import { DraftingViewport2D } from "@/components/workspace/drafting-viewport-2d";
 import { PLATE_SCENE, SLOT_SCENE } from "@/lib/drawing-scene.fixtures";
+import { ENRICHED_RECT_SCENE } from "@/lib/drawing-scene-enriched-fixture";
 
 const SCENES = [
-  { id: "plate", label: "Plate scene", payload: PLATE_SCENE as Record<string, unknown> },
-  { id: "slot", label: "Slot scene", payload: SLOT_SCENE as Record<string, unknown> },
+  { id: "plate", label: "Plate (fixture)", payload: PLATE_SCENE as Record<string, unknown> },
+  { id: "slot", label: "Slot (fixture)", payload: SLOT_SCENE as Record<string, unknown> },
+  { id: "enriched", label: "Auto-enriched rect", payload: ENRICHED_RECT_SCENE as Record<string, unknown> },
 ] as const;
 
 export function DevDraftingPreview() {
