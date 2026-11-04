@@ -1,81 +1,95 @@
-# NaturalCAD
+# NaturalCAD 2D HF App
 
-Gradio prototype for NaturalCAD, a public natural-language CAD modeler built on build123d.
+Gradio MVP for the Hugging Face 2D drafting lane.
 
-## Purpose
+## Product promise
 
-- Fast Hugging Face Spaces deployment
-- Test prompt → spec → CAD loop
-- Validate interaction model before deeper productization
-- Keep the MVP portable enough to offload execution later if Space limits become a problem
+- text prompt, sketch image, or both
+- generate a validated, structured 2D drafting scene
+- refine the current drawing while preserving stable entity IDs
+- preview in-browser
+- download DXF and the portable DrawingScene JSON
 
-## Features
+Short UI note:
 
-- Prompt-driven model generation through the NaturalCAD backend when available
-- Local fallback generation if the backend is unavailable
-- Run build123d geometry and see a GLB preview in the browser
-- Download STL and STEP exports
-- Upload generated STL/STEP artifacts to backend storage when backend is configured
-- If backend omits GLB storage, the UI can generate a local GLB preview from STL for viewing
-- View backend + execution logs
-- Lightweight run logging for MVP testing data (`artifacts/logs/runs.jsonl`)
+> More reference dimensions = more accurate output.
+
+## Current stack
+
+- Gradio for the HF-facing UI
+- versioned, UI-free DrawingScene contract in `app/drawing_core.py`
+- `ezdxf` for DXF authoring/export
+- direct OpenRouter model calls with one selective depth-repair pass for shallow complex concepts
+- QCAD as the target validation environment for output quality
+
+## Current MVP behavior
+
+- accepts text prompt
+- accepts optional sketch image
+- accepts optional reference notes/dimensions
+- generates a simple drafting scene with:
+  - polylines, circles, arcs, and true obround slots
+  - hatch
+  - centerline
+  - dimensions
+  - text
+  - leader note
+- applies the `NOAH_URIU_2D_V1` layer hierarchy while presenting disciplined white-on-black CAD linework by default
+- preserves working colors and black plot styles in the portable scene and DXF metadata
+- renders exact deterministic `ezdxf` hatch patterns in the SVG preview, including nested holes
+- reports a depth check when a creative concept is too sparse for the requested intent
+- limits annotation density and renders aligned dimension bands, CAD ticks, leader arrowheads/landings, and monospaced text knockouts
+- writes DXF, SVG, and DrawingScene JSON into `artifacts/runs/`
+- logs timestamped run/source/runtime metadata into `artifacts/logs/runs.jsonl`
+- visibly labels model output, local demo fallback, and preserved-scene refinement states
+- falls back to a local deterministic scene builder if the model call is unavailable
+- preserves the prior validated scene when a refinement model call cannot run
+
+## Portable contract
+
+`DrawingScene 1.2` is intentionally independent of Gradio, OpenRouter, and the filesystem. Both the SVG preview and DXF exporter consume the same validated scene.
+
+This is the seam that will later move into the main product:
+
+- main app shared shell: conversation, attachments, history, projects
+- 2D workspace: DrawingScene JSON -> 2D preview + DXF/SVG export
+- 3D workspace: current part spec -> GLB/STEP/STL pipeline
+
+See `docs/drawing-scene-v1.md`.
+
+## Environment
+
+- `OPENROUTER_API_KEY` - required for live model calls
+- `NATURALCAD_2D_MODEL` - optional model override for this app
+- `OPENROUTER_MODEL` - fallback model id if `NATURALCAD_2D_MODEL` is unset
+- `OPENROUTER_REFERER` - optional OpenRouter header
+- `OPENROUTER_TITLE` - optional OpenRouter header/title
+- `NATURALCAD_2D_MAX_PASSES` - `1` or `2`; defaults to `2`, but the second pass runs only when an initial creative concept fails the depth gate
+
+This branch is intentionally narrower than the main NaturalCAD 3D product lane.
 
 ## Run locally
 
-From the repo root, the easiest path is:
+From the repo root:
 
 ```bash
-npm run backend:local
 npm run frontend:local
 ```
 
-Those commands use:
-- `scripts/run-local-backend.sh`
-- `scripts/run-local-frontend.sh`
-
-Frontend notes:
-- local Gradio dev needs Python 3.10-3.13 because `build123d` does not currently publish wheels for Python 3.14+
-- by default the frontend helper uses `~/.openclaw/workspace/.venvs/cadrender312`
-- it defaults `NATURALCAD_BACKEND_URL` to `http://127.0.0.1:8010`
-- if `apps/backend-api/.env` exists, it reuses `API_SHARED_SECRET` as `NATURALCAD_API_KEY`
-- override with `NATURALCAD_FRONTEND_VENV=/path/to/venv` if needed
+The helper script prefers a repo-local `.venv`, creates it automatically if needed, and still accepts `NATURALCAD_FRONTEND_VENV=/path/to/venv` if you want to override the environment path.
 
 Manual fallback:
 
-Start the backend first:
-
-```bash
-cd ../backend-api
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/uvicorn app.main:app --reload --port 8010
-```
-
-Then run the Gradio app:
-
 ```bash
 pip install -r requirements.txt
-python app/main.py
+python app.py
 ```
 
-Current Space-oriented dependency note:
-- `build123d==0.10.0` is now declared directly in `requirements.txt`
-- if Hugging Face Space cannot reliably support the CAD dependency stack, we can keep the UI there and offload execution to a container or VM later without changing the product direction
+Open `http://localhost:7860`.
 
-Optional environment variables:
-- `NATURALCAD_BACKEND_URL` (leave unset for a pure Space-only MVP, or set it to enable backend-assisted spec generation + artifact upload)
-- `NATURALCAD_API_KEY`
-- `NATURALCAD_BACKEND_TIMEOUT` (default `4` seconds)
-- `NATURALCAD_SHOW_CODE` (default `false`; set `true` to show generated build123d code in UI logs)
-- `NATURALCAD_VERBOSE_LOGS` (default `false`; logs errors only unless enabled)
-- `BUILD123D_PYTHON` (defaults to the current Python runtime, which is better for Hugging Face Space deployment)
+## Next implementation targets
 
-When backend is enabled and returns a `job.id`, the app will POST STL/STEP files to:
-- `POST /v1/jobs/{job_id}/artifacts`
-
-Runtime artifacts:
-- latest files in `artifacts/` (`model.glb`, `model.stl`, `model.step`)
-- archived runs in `artifacts/runs/` (GLB preview is ephemeral and regenerated locally)
-- lightweight run logs in `artifacts/logs/runs.jsonl`
-
-Open http://localhost:7860
+- exercise live text/image/refinement calls with `OPENROUTER_API_KEY`
+- run the three fixture prompts through QCAD and record output issues
+- add feedback controls and artifact-retention cleanup before public traffic
+- add the backend 2D worker adapter, then merge a 2D/3D workspace switcher into `apps/web`

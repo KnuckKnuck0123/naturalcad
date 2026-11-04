@@ -6,7 +6,7 @@ from typing import Any
 import httpx
 
 from .config import settings
-from .models import GenerationRunResponse, PartSpec, ProjectResponse
+from .models import MODEL_PROFILES, GenerationRunResponse, PartSpec, ProjectResponse
 from .repository import derive_legacy_spec, extract_slider_controls
 from .storage import SupabaseImageStorage
 
@@ -30,14 +30,26 @@ def _mock_worker(action: str, payload: dict[str, Any]) -> dict[str, Any]:
             payload["message"], payload["mode"], payload["output_type"]
         )
         if parent:
-            spec = spec.model_copy(update={"intent": payload["message"]})
+            refined = derive_legacy_spec(payload["message"], payload["mode"], payload["output_type"])
+            merged_dimensions = {**spec.dimensions, **refined.dimensions}
+            semantic_part = {**spec.semantic_part, "last_user_request": payload["message"]}
+            iteration_memory = dict(spec.iteration_memory)
+            iteration_memory.update({
+                "turn_index": int(iteration_memory.get("turn_index", 0)) + 1,
+                "last_user_request": payload["message"],
+                "active_dimensions": sorted(merged_dimensions.keys()),
+            })
+            spec = spec.model_copy(update={"intent": payload["message"], "dimensions": merged_dimensions, "semantic_part": semantic_part, "iteration_memory": iteration_memory})
+        spec_delta = [{"op": "refine", "path": "/intent", "value": payload["message"]}]
+        for label, value in spec.dimensions.items():
+            if parent and isinstance(parent, dict) and (parent.get("dimensions") or {}).get(label) != value:
+                spec_delta.append({"op": "set", "path": f"/dimensions/{label}", "value": value})
         return {
             "ready_to_generate": True,
             "spec": spec.model_dump(),
-            "spec_delta": [{"op": "refine", "path": "/intent", "value": payload["message"]}],
-            "change_summary": "Updated the structured part intent.",
+            "spec_delta": spec_delta,
+            "change_summary": "Updated the structured part intent and merged dimensional edits." if len(spec_delta) > 1 else "Updated the structured part intent.",
             "clarification_questions": [],
-            "model": "local/spec-mock",
             "usage": {},
         }
     return {
@@ -45,11 +57,105 @@ def _mock_worker(action: str, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _legacy_prompt(message: str, project: ProjectResponse, parent: Any, image_urls: list[str]) -> str:
+    prompt = message
+    if parent:
+        prompt = (
+            f"Continue from previous version {parent.id}. "
+            f"Previous prompt: {parent.prompt}\n\n"
+            f"User refinement: {message}"
+        )
+    if image_urls:
+        refs = "\n".join(f"- {url}" for url in image_urls)
+        prompt = f"{prompt}\n\nReference images:\n{refs}"
+    return prompt
+
+
+def _process_generation_legacy(
+    repo: Any,
+    project: ProjectResponse,
+    run: GenerationRunResponse,
+    parent: Any,
+    image_urls: list[str],
+    legacy_error: Exception,
+    claim_token: str,
+) -> None:
+    prompt = _legacy_prompt(run.message, project, parent, image_urls)
+    worker = _worker_request("legacy_generate", {
+        "prompt": prompt,
+        "mode": project.mode,
+        "output_type": project.output_type,
+        "model": settings.legacy_cad_model or settings.cad_model,
+    })
+    success = bool(worker.get("success")) and not worker.get("error")
+    if not success:
+        raise RuntimeError(worker.get("error") or str(legacy_error))
+    if not repo.refresh_run_claim(project.id, run.id, claim_token):
+        return  # claim stolen; the new owner is responsible for terminal state
+    version = repo.create_version(
+        project_id=project.id,
+        prompt=run.message,
+        profile=run.profile,
+        model=worker.get("model", settings.cad_model),
+        artifacts=worker.get("urls", {}),
+        generated_code=worker.get("generated_code", ""),
+        status="completed",
+        error=None,
+        parent_version_id=run.parent_version_id,
+        parameters=extract_slider_controls(run.message),
+        spec=None,
+        spec_delta=[{
+            "op": "legacy_fallback",
+            "value": str(legacy_error)[:300],
+        }],
+        change_summary="Generated a new CAD version via legacy worker fallback.",
+    )
+    repo.update_run(
+        project.id,
+        run.id,
+        status="completed",
+        version_id=version.id,
+        change_summary=version.change_summary,
+        telemetry={
+            "fallback": "legacy_generate",
+            "legacy_error": str(legacy_error)[:300],
+            "cad_model": worker.get("model", settings.cad_model),
+            "cad_usage": worker.get("usage", {}),
+        },
+    )
+    repo.create_message(
+        project_id=project.id,
+        role="assistant",
+        content=version.change_summary,
+        run_id=run.id,
+        version_id=version.id,
+    )
+
+
+RUN_CLAIM_STALE_SECONDS = 600
+
+
+def _accumulate_usage(total: dict[str, int], usage: Any) -> dict[str, int]:
+    """Sum LLM usage across retry attempts so token caps count real spend,
+    including the failed attempts that make expensive runs expensive."""
+    if isinstance(usage, dict):
+        for key, value in usage.items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                total[key] = int(total.get(key, 0)) + int(value)
+    return total
+
+
 def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None:
     run = repo.get_run(project.id, run_id)
     if not run or run.status not in {"submitted", "awaiting_clarification"}:
         return
+    # Exclusive claim prevents the poll-triggered recovery loop from double-executing
+    # a run whose original background task is still alive (duplicate versions + LLM spend).
+    claim_token = repo.claim_run(project.id, run_id, stale_seconds=RUN_CLAIM_STALE_SECONDS)
+    if claim_token is None:
+        return
     started = time.monotonic()
+    telemetry: dict[str, Any] = {}
     try:
         run = repo.update_run(project.id, run.id, status="resolving_spec", error=None)
         parent = repo.get_version(project.id, run.parent_version_id) if run.parent_version_id else None
@@ -65,17 +171,25 @@ def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None
             image_urls.append(storage.create_signed_read(attachment.sanitized_storage_key, expires_in=600))
 
         spec_started = time.monotonic()
-        resolution = _worker_request("resolve_spec", {
-            "parent_spec": parent_spec.model_dump() if parent_spec else None,
-            "message": run.message, "mode": project.mode, "output_type": project.output_type,
-            "image_urls": image_urls, "model": settings.spec_model,
-        })
+        try:
+            resolution = _worker_request("resolve_spec", {
+                "parent_spec": parent_spec.model_dump() if parent_spec else None,
+                "message": run.message, "mode": project.mode, "output_type": project.output_type,
+                "image_urls": image_urls,
+                "vision_model": settings.vision_model,
+                "vision_max_tokens": settings.vision_summary_max_tokens,
+            })
+        except Exception as legacy_error:
+            _process_generation_legacy(repo, project, run, parent, image_urls, legacy_error, claim_token)
+            return
         spec = PartSpec.model_validate(resolution["spec"])
         telemetry = {
-            "spec_model": resolution.get("model", settings.spec_model),
+            "vision_model": resolution.get("vision_model"),
             "spec_latency_ms": int((time.monotonic() - spec_started) * 1000),
             "spec_usage": resolution.get("usage", {}),
         }
+        if resolution.get("vision_error"):
+            telemetry["vision_error"] = resolution["vision_error"]
         common = {
             "draft_spec": spec,
             "spec_delta": resolution.get("spec_delta", []),
@@ -94,11 +208,18 @@ def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None
         generated: dict[str, Any] = {}
         published: dict[str, Any] = {}
         execution_error: str | None = None
+        cad_usage: dict[str, int] = {}
+        cad_attempts = 0
         for _ in range(3):
+            if not repo.refresh_run_claim(project.id, run.id, claim_token):
+                return  # claim stolen; abort before spending more LLM calls
+            cad_attempts += 1
             generated = _worker_request("generate_code", {
-                "spec": spec.model_dump(), "model": settings.cad_model,
+                "spec": spec.model_dump(),
+                "model": MODEL_PROFILES[run.profile].model,
                 "execution_error": execution_error,
             })
+            _accumulate_usage(cad_usage, generated.get("usage"))
             if not generated.get("success"):
                 execution_error = generated.get("error") or "Code generation failed"
                 continue
@@ -113,10 +234,15 @@ def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None
         telemetry.update({
             "cad_model": generated.get("model", settings.cad_model),
             "cad_latency_ms": int((time.monotonic() - cad_started) * 1000),
-            "cad_usage": generated.get("usage", {}),
+            "cad_usage": cad_usage,
+            "cad_attempts": cad_attempts,
         })
         if not published.get("success"):
+            # telemetry (including accumulated cad_usage) is persisted by the
+            # failure handler so token caps count the spend of failed runs too
             raise RuntimeError(execution_error or "CAD generation failed")
+        if not repo.refresh_run_claim(project.id, run.id, claim_token):
+            return  # claim stolen; the new owner publishes terminal state
         repo.update_run(project.id, run.id, status="publishing", telemetry=telemetry)
         version = repo.create_version(
             project_id=project.id, prompt=run.message, profile=run.profile,
@@ -133,5 +259,9 @@ def process_generation(repo: Any, run_id: str, project: ProjectResponse) -> None
             content=version.change_summary or "Generated a new CAD version.", run_id=run.id, version_id=version.id,
         )
     except Exception as exc:  # workflow failures must become inspectable terminal state
-        repo.update_run(project.id, run.id, status="failed", error=str(exc)[:500])
+        if not repo.refresh_run_claim(project.id, run.id, claim_token):
+            return  # claim stolen; do not clobber the new owner's terminal state
+        current = repo.get_run(project.id, run_id)
+        failure_telemetry = {**(current.telemetry if current else {}), **telemetry}
+        repo.update_run(project.id, run.id, status="failed", error=str(exc)[:500], telemetry=failure_telemetry)
         repo.create_message(project_id=project.id, role="assistant", content="Generation failed. Please retry.", run_id=run.id)

@@ -59,7 +59,7 @@ Project message + sanitized references
     → vision model resolves a validated spec
     → CAD model generates build123d code from the spec
     → no-secret Modal executor validates and runs code
-    → trusted publisher stores GLB/STL/STEP/DXF artifacts
+    → trusted publisher stores GLB/STL/STEP artifacts
 ```
 
 The executor has no attached OpenRouter or Supabase secrets and blocks network

@@ -7,7 +7,12 @@
     "frontend:local": "./scripts/run-local-frontend.sh",
     "web:dev": "npm --workspace @naturalcad/web run dev",
     "web:build": "npm --workspace @naturalcad/web run build",
-    "web:typecheck": "npm --workspace @naturalcad/web run typecheck"
+    "web:typecheck": "npm --workspace @naturalcad/web run typecheck",
+    "beta:check": "./scripts/check-beta-readiness.sh",
+    "beta:deploy-worker": "./scripts/deploy-modal-worker.sh",
+    "beta:deploy-backend": "./scripts/deploy-cloud-run-backend.sh",
+    "beta:migrate-supabase": "./scripts/apply-supabase-migrations.sh",
+    "beta:smoke": "./scripts/smoke-beta.sh"
   },
   "workspaces": [
     "apps/*",

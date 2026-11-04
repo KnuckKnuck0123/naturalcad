@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -56,6 +57,34 @@ class ModelProfile(BaseModel):
     timeout_seconds: int
 
 
+MODEL_PROFILES = {
+    "fast": ModelProfile(
+        id="fast",
+        label="Fast",
+        model=os.getenv("NATURALCAD_MODE_FAST", "openai/gpt-4o-mini"),
+        max_prompt_chars=700,
+        max_tokens=800,
+        timeout_seconds=45,
+    ),
+    "balanced": ModelProfile(
+        id="balanced",
+        label="Balanced",
+        model=os.getenv("NATURALCAD_MODE_BALANCED", "google/gemini-2.5-pro"),
+        max_prompt_chars=1200,
+        max_tokens=1800,
+        timeout_seconds=90,
+    ),
+    "quality": ModelProfile(
+        id="quality",
+        label="Quality",
+        model=os.getenv("NATURALCAD_MODE_QUALITY", "anthropic/claude-sonnet-4"),
+        max_prompt_chars=1800,
+        max_tokens=2600,
+        timeout_seconds=140,
+    ),
+}
+
+
 class CreateProjectRequest(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     mode: CadModeType = "part"
@@ -88,11 +117,15 @@ class PartSpec(BaseModel):
     output_type: OutputType = "3d_solid"
     units: Literal["mm"] = "mm"
     semantic_part: dict[str, Any] = Field(default_factory=dict)
+    family_hint: dict[str, Any] = Field(default_factory=dict)
     geometry: dict[str, Any] = Field(default_factory=dict)
     dimensions: dict[str, float] = Field(default_factory=dict)
     constraints: list[dict[str, Any]] = Field(default_factory=list)
+    style: dict[str, Any] = Field(default_factory=dict)
+    iteration_memory: dict[str, Any] = Field(default_factory=dict)
     assumptions: list[str] = Field(default_factory=list)
     uncertainties: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
 
 
 class ParameterControl(BaseModel):

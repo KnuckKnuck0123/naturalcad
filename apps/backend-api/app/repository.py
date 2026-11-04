@@ -21,6 +21,205 @@ from .models import (
     utc_now,
 )
 
+_DIMENSION_LABELS = ("width", "height", "thickness", "diameter", "length", "depth", "span")
+_CATEGORY_HINTS = (
+    ("support_bracket", ("bracket", "support", "mount")),
+    ("flange", ("flange",)),
+    ("adapter", ("adapter", "coupler")),
+    ("plate", ("plate", "backplate", "back plate")),
+    ("shaft_collar", ("shaft", "collar", "bushing")),
+    ("tube_interface", ("tube", "pipe", "hose")),
+)
+_FEATURE_HINTS = (
+    ("mounting_holes", ("hole", "holes", "bolt", "bolts", "screw", "screws")),
+    ("slots", ("slot", "slots")),
+    ("tabs", ("tab", "tabs", "mounting tab", "mounting tabs")),
+    ("ribs", ("rib", "ribs", "gusset", "gussets")),
+    ("bosses", ("boss", "bosses")),
+    ("flanges", ("flange", "flanges")),
+    ("tube_interfaces", ("tube", "pipe", "hose")),
+)
+_STYLE_HINTS = ("industrial", "structural", "heavy-duty", "machined", "cast", "printed", "sheet metal")
+
+
+def _extract_dimensions(prompt: str) -> dict[str, float]:
+    text = prompt.lower()
+    dimensions: dict[str, float] = {}
+
+    triplet = re.search(
+        r"\b(\d+(?:\.\d+)?)\s*(?:mm)?\s*[x×]\s*(\d+(?:\.\d+)?)\s*(?:mm)?\s*[x×]\s*(\d+(?:\.\d+)?)\b",
+        text,
+    )
+    if triplet:
+        dimensions.update({
+            "width": float(triplet.group(1)),
+            "height": float(triplet.group(2)),
+            "thickness": float(triplet.group(3)),
+        })
+
+    for label in _DIMENSION_LABELS:
+        patterns = (
+            rf"\b{label}\b\s*(?:=|:|of|to|is)?\s*(\d+(?:\.\d+)?)\s*(?:mm|millimeters?)?\b",
+            rf"\b(\d+(?:\.\d+)?)\s*(?:mm|millimeters?)?\s*{label}\b",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                dimensions[label] = float(match.group(1))
+                break
+    return dimensions
+
+
+def _feature_count(text: str, keyword: str) -> int | None:
+    singular = re.escape(keyword.rstrip("s"))
+    plural = re.escape(keyword if keyword.endswith("s") else f"{keyword}s")
+    match = re.search(rf"\b(\d+)\s+(?:{singular}|{plural})\b", text)
+    return int(match.group(1)) if match else None
+
+
+def _infer_category(text: str) -> str:
+    for category, hints in _CATEGORY_HINTS:
+        if any(hint in text for hint in hints):
+            return category
+    return "unspecified"
+
+
+def _infer_symmetry(text: str) -> str:
+    if "asymmetric" in text or "asymmetrical" in text:
+        return "asymmetric"
+    if any(token in text for token in ("symmetric", "symmetrical", "mirror", "mirrored")):
+        return "symmetric"
+    return "unspecified"
+
+
+def _infer_interfaces(text: str) -> list[str]:
+    interfaces = []
+    for name, hints in (
+        ("wall_mount", ("wall", "mount")),
+        ("tube_interface", ("tube", "pipe", "hose")),
+        ("shaft_interface", ("shaft", "axle")),
+        ("bolt_pattern", ("bolt", "screw", "fastener")),
+    ):
+        if any(hint in text for hint in hints):
+            interfaces.append(name)
+    return interfaces
+
+
+def _infer_features(text: str, dimensions: dict[str, float]) -> tuple[list[dict[str, Any]], list[str]]:
+    features: list[dict[str, Any]] = []
+    primitive_strategy: list[str] = []
+    for feature_type, hints in _FEATURE_HINTS:
+        if not any(hint in text for hint in hints):
+            continue
+        feature: dict[str, Any] = {"name": feature_type, "feature_type": feature_type}
+        count = next((_feature_count(text, hint.split()[-1]) for hint in hints if _feature_count(text, hint.split()[-1]) is not None), None)
+        if count is not None:
+            feature["count"] = count
+        attrs: dict[str, Any] = {}
+        if feature_type == "mounting_holes":
+            if "diameter" in dimensions:
+                attrs["diameter_mm"] = dimensions["diameter"]
+            metric_match = re.search(r"\bm(\d+(?:\.\d+)?)\b", text)
+            if metric_match:
+                attrs["thread_major_diameter_mm"] = float(metric_match.group(1))
+            primitive_strategy.extend(["extrude", "boolean_subtract"])
+        elif feature_type in {"slots", "tabs", "flanges"}:
+            primitive_strategy.extend(["extrude", "boolean_union"])
+        elif feature_type in {"ribs", "bosses"}:
+            primitive_strategy.extend(["extrude", "boolean_union"])
+        elif feature_type == "tube_interfaces":
+            if "diameter" in dimensions:
+                attrs["interface_diameter_mm"] = dimensions["diameter"]
+            primitive_strategy.extend(["revolve", "boolean_subtract"])
+        if attrs:
+            feature["attributes"] = attrs
+        features.append(feature)
+    return features, sorted(set(primitive_strategy or ["extrude"]))
+
+
+def _infer_constraints(text: str, dimensions: dict[str, float]) -> list[dict[str, Any]]:
+    constraints: list[dict[str, Any]] = []
+    tolerance_match = re.search(r"(?:\+/-|±)\s*(\d+(?:\.\d+)?)\s*(?:mm|millimeters?)?", text)
+    if tolerance_match:
+        constraints.append({"kind": "tolerance", "target": "global", "value": float(tolerance_match.group(1)), "units": "mm"})
+    clearance_match = re.search(
+        r"(?:\bclearance\b(?:\s*(?:of|=|:|is))?\s*(\d+(?:\.\d+)?)|\b(\d+(?:\.\d+)?)\s*(?:mm|millimeters?)?\s+clearance\b)",
+        text,
+    )
+    if clearance_match:
+        value = clearance_match.group(1) or clearance_match.group(2)
+        constraints.append({"kind": "clearance", "target": "interface", "value": float(value), "units": "mm"})
+    if any(token in text for token in ("press fit", "slip fit", "interference fit")):
+        fit = "press_fit" if "press fit" in text else "slip_fit" if "slip fit" in text else "interference_fit"
+        constraints.append({"kind": "fit", "target": "interface", "value": fit})
+    if "thickness" in dimensions:
+        constraints.append({"kind": "driving_dimension", "target": "thickness", "value": dimensions["thickness"], "units": "mm"})
+    return constraints
+
+
+def _infer_style(text: str, symmetry: str) -> dict[str, Any]:
+    keywords = [keyword for keyword in _STYLE_HINTS if keyword in text]
+    manufacturing_bias = "machined" if "machined" in text else "cast" if "cast" in text else "printed" if "printed" in text else "unspecified"
+    return {"keywords": keywords, "symmetry": symmetry, "manufacturing_bias": manufacturing_bias}
+
+
+def _infer_family_hint(category: str, features: list[dict[str, Any]]) -> dict[str, Any]:
+    names = {feature["feature_type"] for feature in features}
+    generation_mode = "new"
+    confidence = 0.35
+    if category == "support_bracket":
+        generation_mode = "extend"
+        confidence = 0.72
+    elif category in {"flange", "adapter", "plate"}:
+        generation_mode = "reuse"
+        confidence = 0.68
+    if "ribs" in names or "tube_interfaces" in names:
+        confidence = min(0.9, confidence + 0.08)
+    return {
+        "name": category,
+        "generation_mode": generation_mode,
+        "confidence": round(confidence, 2),
+        "novelty_score": 0.55 if generation_mode == "reuse" else 0.72 if generation_mode == "extend" else 0.84,
+    }
+
+
+def _infer_uncertainties(text: str, dimensions: dict[str, float], interfaces: list[str], features: list[dict[str, Any]]) -> list[str]:
+    uncertainties: list[str] = []
+    if any(feature["feature_type"] == "mounting_holes" for feature in features) and "diameter" not in dimensions and not re.search(r"\bm\d+(?:\.\d+)?\b", text):
+        uncertainties.append("Hole size was referenced but no explicit diameter or fastener size was given.")
+    if "tube_interface" in interfaces and "diameter" not in dimensions:
+        uncertainties.append("Tube or pipe interface mentioned without an explicit interface diameter.")
+    if any(token in text for token in ("fit", "clearance", "tolerance")) and not re.search(r"(?:\+/-|±|\bclearance\b)", text):
+        uncertainties.append("Fit-critical language was used without an explicit tolerance or clearance value.")
+    return uncertainties
+
+
+def _infer_notes(category: str, constraints: list[dict[str, Any]]) -> list[str]:
+    notes = [f"Treat {category} as a concept-to-CAD part specification until fabrication details are confirmed."]
+    if any(item["kind"] in {"tolerance", "clearance", "fit"} for item in constraints):
+        notes.append("Preserve fit-critical constraints through later refinement turns.")
+    return notes
+
+
+def _build_iteration_memory(
+    *,
+    prior: dict[str, Any] | None,
+    dimensions: dict[str, float],
+    constraints: list[dict[str, Any]],
+    features: list[dict[str, Any]],
+    uncertainties: list[str],
+    message: str,
+) -> dict[str, Any]:
+    turn_index = int((prior or {}).get("turn_index", 0)) + 1
+    return {
+        "turn_index": turn_index,
+        "last_user_request": message.strip(),
+        "active_dimensions": sorted(dimensions.keys()),
+        "preserved_constraints": [item.get("kind", "unknown") for item in constraints],
+        "tracked_features": [feature.get("name") or feature.get("feature_type") for feature in features],
+        "unresolved_questions": uncertainties[:3],
+    }
+
 
 @dataclass
 class QuotaState:
@@ -39,6 +238,8 @@ class InMemoryRepo:
         self.project_runs: defaultdict[str, list[GenerationRunResponse]] = defaultdict(list)
         self.project_attachments: defaultdict[str, list[AttachmentResponse]] = defaultdict(list)
         self.quotas: dict[str, QuotaState] = {}
+        self.ip_quotas: dict[str, QuotaState] = {}
+        self.run_claims: dict[str, tuple[float, str]] = {}
         self._lock = threading.RLock()
 
     def create_guest_session(self, runs_per_window: int) -> SessionResponse:
@@ -86,6 +287,18 @@ class InMemoryRepo:
                 return False, 0
             state.bucket.append(now)
             return True, max_runs - len(state.bucket)
+
+    def check_and_consume_ip_quota(self, ip_hash: str, *, kind: str, max_events: int, window_seconds: int) -> tuple[bool, int]:
+        with self._lock:
+            state = self.ip_quotas.setdefault(f"{ip_hash}:{kind}", QuotaState(bucket=deque()))
+            now = time.time()
+            cutoff = now - window_seconds
+            while state.bucket and state.bucket[0] < cutoff:
+                state.bucket.popleft()
+            if len(state.bucket) >= max_events:
+                return False, 0
+            state.bucket.append(now)
+            return True, max_events - len(state.bucket)
 
     def create_project(self, session_id: str, title: str, mode: str, output_type: str) -> ProjectResponse:
         now = utc_now()
@@ -136,6 +349,29 @@ class InMemoryRepo:
 
     def get_run(self, project_id: str, run_id: str) -> GenerationRunResponse | None:
         return next((r for r in self.project_runs.get(project_id, []) if r.id == run_id), None)
+
+    def claim_run(self, project_id: str, run_id: str, *, stale_seconds: int) -> str | None:
+        """Atomically claim exclusive processing of a run. Returns a claim token, or None if
+        another worker holds a fresh claim. Stale claims (dead workers) can be stolen."""
+        with self._lock:
+            if not self.get_run(project_id, run_id):
+                return None
+            now = time.time()
+            existing = self.run_claims.get(run_id)
+            if existing and now - existing[0] < stale_seconds:
+                return None
+            token = uuid.uuid4().hex
+            self.run_claims[run_id] = (now, token)
+            return token
+
+    def refresh_run_claim(self, project_id: str, run_id: str, token: str) -> bool:
+        """Heartbeat an existing claim. Returns False if the claim was stolen."""
+        with self._lock:
+            existing = self.run_claims.get(run_id)
+            if not existing or existing[1] != token:
+                return False
+            self.run_claims[run_id] = (time.time(), token)
+            return True
 
     def list_runs(self, project_id: str) -> list[GenerationRunResponse]:
         return sorted(self.project_runs.get(project_id, []), key=lambda r: r.created_at, reverse=True)
@@ -218,16 +454,42 @@ class InMemoryRepo:
 
 
 def derive_legacy_spec(prompt: str, mode: str, output_type: str) -> PartSpec:
-    dimensions: dict[str, float] = {}
-    for label in ("width", "height", "thickness", "diameter", "length", "depth", "span"):
-        match = re.search(rf"\b{label}\b\s*(?:=|:|of)?\s*(\d+(?:\.\d+)?)", prompt.lower())
-        if match:
-            dimensions[label] = float(match.group(1))
+    text = prompt.lower()
+    dimensions = _extract_dimensions(prompt)
+    category = _infer_category(text)
+    symmetry = _infer_symmetry(text)
+    interfaces = _infer_interfaces(text)
+    features, primitive_strategy = _infer_features(text, dimensions)
+    constraints = _infer_constraints(text, dimensions)
+    style = _infer_style(text, symmetry)
+    uncertainties = _infer_uncertainties(text, dimensions, interfaces, features)
+    notes = _infer_notes(category, constraints)
+    iteration_memory = _build_iteration_memory(
+        prior=None,
+        dimensions=dimensions,
+        constraints=constraints,
+        features=features,
+        uncertainties=uncertainties,
+        message=prompt,
+    )
     return PartSpec(
         intent=prompt.strip(), mode=mode, output_type=output_type,
-        semantic_part={"category": "unspecified", "function": prompt.strip(), "topology": []},
-        geometry={"features": []}, dimensions=dimensions,
+        semantic_part={
+            "category": category,
+            "function": prompt.strip(),
+            "topology": [feature["name"] for feature in features],
+            "symmetry": symmetry,
+            "interfaces": interfaces,
+        },
+        family_hint=_infer_family_hint(category, features),
+        geometry={"primitive_strategy": primitive_strategy, "features": features},
+        dimensions=dimensions,
+        constraints=constraints,
+        style=style,
+        iteration_memory=iteration_memory,
         assumptions=["Legacy prompt converted to a draft structured specification."],
+        uncertainties=uncertainties,
+        notes=notes,
     )
 
 

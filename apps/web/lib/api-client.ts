@@ -29,10 +29,16 @@ export function getProject(projectId: string) {
   return request<ProjectDetail>(`/projects/${projectId}`, "GET");
 }
 
-export function startGeneration(projectId: string, message: string, parentVersionId: string | null, attachmentIds: string[]) {
+export function startGeneration(
+  projectId: string,
+  message: string,
+  parentVersionId: string | null,
+  attachmentIds: string[],
+  profile: "fast" | "balanced" | "quality",
+) {
   return request<GenerationRun>(`/projects/${projectId}/generations`, "POST", {
     message, parent_version_id: parentVersionId, attachment_ids: attachmentIds,
-    profile: "balanced", idempotency_key: crypto.randomUUID(),
+    profile, idempotency_key: crypto.randomUUID(),
   });
 }
 
